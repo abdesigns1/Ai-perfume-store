@@ -4,7 +4,7 @@
 // Slide-over cart drawer triggered from the Navbar cart icon.
 
 import Link from "next/link";
-import { useCart } from "@/lib/cartContext";
+import { useCart } from "../lib/cartContext";
 import { fonts, type Theme } from "../lib/theme";
 import { formatPrice } from "../utils/format";
 
@@ -19,6 +19,8 @@ export default function CartDrawer({ theme: t }: Props) {
     totalItems,
     isOpen,
     closeCart,
+    isSyncing,
+    userId,
   } = useCart();
 
   const DELIVERY_THRESHOLD = 20000;
@@ -76,24 +78,39 @@ export default function CartDrawer({ theme: t }: Props) {
             >
               Your Cart
             </h2>
-            {totalItems > 0 && (
+            {isSyncing ? (
               <span
                 style={{
-                  background: t.gold,
-                  color: t.dark ? "#0a0a0a" : "#fff",
                   fontFamily: fonts.sans,
-                  fontSize: 10,
-                  fontWeight: 600,
-                  width: 22,
-                  height: 22,
-                  borderRadius: "50%",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
+                  fontSize: 9,
+                  letterSpacing: "0.15em",
+                  textTransform: "uppercase",
+                  color: t.muted,
+                  animation: "pulse 1s ease-in-out infinite",
                 }}
               >
-                {totalItems}
+                Syncing...
               </span>
+            ) : (
+              totalItems > 0 && (
+                <span
+                  style={{
+                    background: t.gold,
+                    color: t.dark ? "#0a0a0a" : "#fff",
+                    fontFamily: fonts.sans,
+                    fontSize: 10,
+                    fontWeight: 600,
+                    width: 22,
+                    height: 22,
+                    borderRadius: "50%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  {totalItems}
+                </span>
+              )
             )}
           </div>
           <button
@@ -123,6 +140,33 @@ export default function CartDrawer({ theme: t }: Props) {
             ×
           </button>
         </div>
+
+        {/* ── Sync status banner ── */}
+        {userId && !isSyncing && (
+          <div
+            style={{
+              padding: "8px 28px",
+              background: t.subtle,
+              borderBottom: `1px solid ${t.border}`,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              flexShrink: 0,
+            }}
+          >
+            <span style={{ color: t.gold, fontSize: 10 }}>✦</span>
+            <span
+              style={{
+                fontFamily: fonts.sans,
+                fontSize: 10,
+                color: t.muted,
+                letterSpacing: "0.1em",
+              }}
+            >
+              Cart saved to your account
+            </span>
+          </div>
+        )}
 
         {/* ── Free delivery progress bar ── */}
         {subtotal > 0 && (

@@ -1,14 +1,15 @@
 "use client";
 
 // app/auth/register/page.tsx
-// Register page — split screen, perfume image left, form right.
-// Wired to Supabase Auth in Phase 6.
+// Customer registration with phone number field.
 
 import { useState } from "react";
 import Link from "next/link";
 import { useTheme } from "../../../hooks/useTheme";
 import { useMediaQuery } from "../../../hooks/useMediaQuery";
 import { fonts } from "../../../lib/theme";
+import { signInWithGoogle } from "../../../lib/auth";
+import { supabase } from "../../../lib/supabase";
 import GlobalStyles from "../../../components/GlobalStyles";
 
 export default function RegisterPage() {
@@ -17,6 +18,7 @@ export default function RegisterPage() {
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [showPass, setShowPass] = useState(false);
@@ -26,13 +28,13 @@ export default function RegisterPage() {
   const [agreed, setAgreed] = useState(false);
 
   const passwordStrength = (p: string) => {
-    if (p.length === 0) return 0;
-    let score = 0;
-    if (p.length >= 8) score++;
-    if (/[A-Z]/.test(p)) score++;
-    if (/[0-9]/.test(p)) score++;
-    if (/[^A-Za-z0-9]/.test(p)) score++;
-    return score;
+    if (!p.length) return 0;
+    let s = 0;
+    if (p.length >= 8) s++;
+    if (/[A-Z]/.test(p)) s++;
+    if (/[0-9]/.test(p)) s++;
+    if (/[^A-Za-z0-9]/.test(p)) s++;
+    return s;
   };
 
   const strength = passwordStrength(password);
@@ -42,8 +44,12 @@ export default function RegisterPage() {
   ];
 
   const handleSubmit = async () => {
-    if (!fullName || !email || !password || !confirm) {
+    if (!fullName || !email || !phone || !password || !confirm) {
       setError("Please fill in all fields.");
+      return;
+    }
+    if (!/^\+?[\d\s\-()]{7,15}$/.test(phone)) {
+      setError("Please enter a valid phone number.");
       return;
     }
     if (password !== confirm) {
@@ -58,12 +64,43 @@ export default function RegisterPage() {
       setError("Please agree to the terms and conditions.");
       return;
     }
+
     setLoading(true);
     setError("");
-    // TODO Phase 6: replace with Supabase auth
-    await new Promise((r) => setTimeout(r, 1200));
+
+    const { data, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { full_name: fullName, phone, role: "customer" },
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+
+    if (signUpError) {
+      setError(signUpError.message);
+      setLoading(false);
+      return;
+    }
+
+    // Save phone to profiles immediately
+    if (data.user) {
+      await supabase.from("profiles").upsert({
+        id: data.user.id,
+        full_name: fullName,
+        email,
+        phone,
+        role: "customer",
+      });
+    }
+
     setLoading(false);
     setSuccess(true);
+  };
+
+  const handleGoogle = async () => {
+    const { error } = await signInWithGoogle();
+    if (error) setError(error.message);
   };
 
   return (
@@ -79,7 +116,7 @@ export default function RegisterPage() {
     >
       <GlobalStyles theme={t} />
 
-      {/* ── Left: image panel ── */}
+      {/* Left image */}
       {!isMobile && (
         <div
           style={{ flex: "0 0 48%", position: "relative", overflow: "hidden" }}
@@ -183,7 +220,7 @@ export default function RegisterPage() {
         </div>
       )}
 
-      {/* ── Right: form panel ── */}
+      {/* Right form */}
       <div
         style={{
           flex: 1,
@@ -196,7 +233,6 @@ export default function RegisterPage() {
         }}
       >
         <div style={{ width: "100%", maxWidth: 420 }}>
-          {/* Mobile logo */}
           {isMobile && (
             <Link
               href="/"
@@ -242,7 +278,6 @@ export default function RegisterPage() {
           )}
 
           {success ? (
-            /* ── Success state ── */
             <div style={{ textAlign: "center" }}>
               <div
                 style={{
@@ -255,24 +290,46 @@ export default function RegisterPage() {
                   justifyContent: "center",
                   margin: "0 auto 24px",
                   fontSize: 28,
+                  color: t.gold,
                 }}
               >
                 ✦
               </div>
               <h2 style={{ fontSize: 28, fontWeight: 300, marginBottom: 12 }}>
-                Account Created!
+                Check Your Email!
               </h2>
               <p
                 style={{
                   fontFamily: fonts.sans,
                   fontSize: 13,
                   color: t.muted,
+                  marginBottom: 12,
+                  lineHeight: 1.7,
+                }}
+              >
+                We sent a verification link to:
+              </p>
+              <p
+                style={{
+                  color: t.gold,
+                  fontFamily: fonts.sans,
+                  fontSize: 14,
+                  marginBottom: 32,
+                  letterSpacing: "0.05em",
+                }}
+              >
+                {email}
+              </p>
+              <p
+                style={{
+                  fontFamily: fonts.sans,
+                  fontSize: 12,
+                  color: t.muted,
                   marginBottom: 32,
                   lineHeight: 1.7,
                 }}
               >
-                Welcome to ScentAI. Check your email to verify your account then
-                sign in.
+                Click the link to activate your account, then sign in.
               </p>
               <Link
                 href="/auth/login"
@@ -288,12 +345,11 @@ export default function RegisterPage() {
                   textDecoration: "none",
                 }}
               >
-                Sign In
+                Go to Sign In
               </Link>
             </div>
           ) : (
             <>
-              {/* Header */}
               <p
                 style={{
                   fontFamily: fonts.sans,
@@ -321,7 +377,7 @@ export default function RegisterPage() {
                   fontFamily: fonts.sans,
                   fontSize: 13,
                   color: t.muted,
-                  marginBottom: 40,
+                  marginBottom: 36,
                   lineHeight: 1.7,
                 }}
               >
@@ -334,7 +390,6 @@ export default function RegisterPage() {
                 </Link>
               </p>
 
-              {/* Error */}
               {error && (
                 <div
                   style={{
@@ -351,9 +406,8 @@ export default function RegisterPage() {
                 </div>
               )}
 
-              {/* Form */}
               <div
-                style={{ display: "flex", flexDirection: "column", gap: 20 }}
+                style={{ display: "flex", flexDirection: "column", gap: 18 }}
               >
                 <AuthInput
                   label="Full Name"
@@ -372,7 +426,17 @@ export default function RegisterPage() {
                   theme={t}
                 />
 
-                {/* Password with strength meter */}
+                {/* Phone number */}
+                <AuthInput
+                  label="Phone Number"
+                  type="tel"
+                  value={phone}
+                  placeholder="+234 800 000 0000"
+                  onChange={setPhone}
+                  theme={t}
+                />
+
+                {/* Password */}
                 <div>
                   <AuthInput
                     label="Password"
@@ -398,7 +462,6 @@ export default function RegisterPage() {
                       </button>
                     }
                   />
-                  {/* Strength bar */}
                   {password.length > 0 && (
                     <div style={{ marginTop: 8 }}>
                       <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
@@ -439,7 +502,7 @@ export default function RegisterPage() {
                   theme={t}
                 />
 
-                {/* Terms checkbox */}
+                {/* Terms */}
                 <label
                   style={{
                     display: "flex",
@@ -501,7 +564,6 @@ export default function RegisterPage() {
                   </span>
                 </label>
 
-                {/* Submit */}
                 <button
                   onClick={handleSubmit}
                   disabled={loading}
@@ -522,7 +584,6 @@ export default function RegisterPage() {
                   {loading ? "Creating account..." : "Create Account"}
                 </button>
 
-                {/* Divider */}
                 <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
                   <div style={{ flex: 1, height: 1, background: t.border }} />
                   <span
@@ -538,8 +599,8 @@ export default function RegisterPage() {
                   <div style={{ flex: 1, height: 1, background: t.border }} />
                 </div>
 
-                {/* Google */}
                 <button
+                  onClick={handleGoogle}
                   style={{
                     background: "none",
                     border: `1px solid ${t.border}`,
@@ -564,12 +625,11 @@ export default function RegisterPage() {
                       t.border)
                   }
                 >
-                  <span style={{ fontSize: 16 }}>G</span>
-                  Continue with Google
+                  <span style={{ fontSize: 16 }}>G</span> Continue with Google
                 </button>
               </div>
 
-              <div style={{ textAlign: "center", marginTop: 40 }}>
+              <div style={{ textAlign: "center", marginTop: 36 }}>
                 <button
                   onClick={toggleTheme}
                   style={{

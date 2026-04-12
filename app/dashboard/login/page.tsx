@@ -1,17 +1,20 @@
 "use client";
 
 // app/dashboard/login/page.tsx
-// Admin login page — centered card, separate from customer auth.
-// Wired to Supabase Auth + role check in Phase 6.
+// Admin login — email + password via Supabase auth.
+// Redirects to /dashboard on success.
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useTheme } from "@/hooks/useTheme";
 import { fonts } from "@/lib/theme";
+import { signIn } from "@/lib/auth";
 import GlobalStyles from "@/components/GlobalStyles";
 
 export default function AdminLoginPage() {
   const { theme: t, toggleTheme } = useTheme(true);
+  const router = useRouter();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -26,11 +29,15 @@ export default function AdminLoginPage() {
     }
     setLoading(true);
     setError("");
-    // TODO Phase 6: Supabase auth + check user role === 'admin'
-    await new Promise((r) => setTimeout(r, 1200));
+
+    const { error } = await signIn(email, password);
     setLoading(false);
-    // Simulate successful admin login — redirect to dashboard
-    window.location.href = "/dashboard";
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+    router.push("/dashboard");
   };
 
   return (
@@ -52,7 +59,7 @@ export default function AdminLoginPage() {
       <GlobalStyles theme={t} />
       <div className="grain" />
 
-      {/* Decorative background circles */}
+      {/* Decorative circles */}
       <div
         style={{
           position: "fixed",
@@ -94,7 +101,7 @@ export default function AdminLoginPage() {
           zIndex: 1,
         }}
       >
-        {/* Logo + Admin badge */}
+        {/* Logo + badge */}
         <div style={{ textAlign: "center", marginBottom: 40 }}>
           <div
             style={{
@@ -138,8 +145,6 @@ export default function AdminLoginPage() {
               SCENTAI
             </span>
           </div>
-
-          {/* Admin badge */}
           <div
             style={{
               display: "flex",
@@ -161,7 +166,6 @@ export default function AdminLoginPage() {
               Admin Portal
             </span>
           </div>
-
           <h1
             style={{
               fontSize: 28,
@@ -203,7 +207,6 @@ export default function AdminLoginPage() {
 
         {/* Form */}
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          {/* Email */}
           <div>
             <label
               style={{
@@ -243,7 +246,6 @@ export default function AdminLoginPage() {
             />
           </div>
 
-          {/* Password */}
           <div>
             <label
               style={{
@@ -304,7 +306,6 @@ export default function AdminLoginPage() {
             </div>
           </div>
 
-          {/* Submit */}
           <button
             onClick={handleSubmit}
             disabled={loading}
@@ -319,7 +320,7 @@ export default function AdminLoginPage() {
               textTransform: "uppercase",
               padding: "16px",
               marginTop: 4,
-              transition: "background 0.2s, transform 0.15s",
+              transition: "background 0.2s",
             }}
             onMouseEnter={(e) => {
               if (!loading)
@@ -327,16 +328,14 @@ export default function AdminLoginPage() {
             }}
             onMouseLeave={(e) => {
               if (!loading)
-                (e.currentTarget as HTMLElement).style.background = loading
-                  ? t.border
-                  : t.gold;
+                (e.currentTarget as HTMLElement).style.background = t.gold;
             }}
           >
             {loading ? "Verifying..." : "Access Dashboard"}
           </button>
         </div>
 
-        {/* Footer links */}
+        {/* Footer */}
         <div
           style={{
             display: "flex",
@@ -383,7 +382,6 @@ export default function AdminLoginPage() {
         </div>
       </div>
 
-      {/* Security note */}
       <p
         style={{
           fontFamily: fonts.sans,

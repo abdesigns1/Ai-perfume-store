@@ -1,14 +1,14 @@
 "use client";
 
 // app/auth/forgot-password/page.tsx
-// Forgot password page — split screen layout.
-// Wired to Supabase Auth in Phase 6.
+// Forgot password — wired to Supabase Auth resetPasswordForEmail().
 
 import { useState } from "react";
 import Link from "next/link";
 import { useTheme } from "../../../hooks/useTheme";
 import { useMediaQuery } from "../../../hooks/useMediaQuery";
 import { fonts } from "../../../lib/theme";
+import { resetPassword } from "../../../lib/auth";
 import GlobalStyles from "../../../components/GlobalStyles";
 
 export default function ForgotPasswordPage() {
@@ -29,11 +29,16 @@ export default function ForgotPasswordPage() {
       setError("Please enter a valid email address.");
       return;
     }
+
     setLoading(true);
     setError("");
-    // TODO Phase 6: replace with Supabase auth resetPasswordForEmail()
-    await new Promise((r) => setTimeout(r, 1200));
+    const { error } = await resetPassword(email);
     setLoading(false);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
     setSent(true);
   };
 
@@ -50,7 +55,7 @@ export default function ForgotPasswordPage() {
     >
       <GlobalStyles theme={t} />
 
-      {/* ── Left: image panel ── */}
+      {/* Left image */}
       {!isMobile && (
         <div
           style={{ flex: "0 0 48%", position: "relative", overflow: "hidden" }}
@@ -154,7 +159,7 @@ export default function ForgotPasswordPage() {
         </div>
       )}
 
-      {/* ── Right: form panel ── */}
+      {/* Right form */}
       <div
         style={{
           flex: 1,
@@ -166,7 +171,6 @@ export default function ForgotPasswordPage() {
         }}
       >
         <div style={{ width: "100%", maxWidth: 420 }}>
-          {/* Mobile logo */}
           {isMobile && (
             <Link
               href="/"
@@ -212,7 +216,6 @@ export default function ForgotPasswordPage() {
           )}
 
           {sent ? (
-            /* ── Success state ── */
             <div style={{ textAlign: "center" }}>
               <div
                 style={{
@@ -225,6 +228,7 @@ export default function ForgotPasswordPage() {
                   justifyContent: "center",
                   margin: "0 auto 24px",
                   fontSize: 28,
+                  color: t.gold,
                 }}
               >
                 ✉
@@ -299,7 +303,6 @@ export default function ForgotPasswordPage() {
             </div>
           ) : (
             <>
-              {/* Header */}
               <p
                 style={{
                   fontFamily: fonts.sans,
@@ -334,7 +337,6 @@ export default function ForgotPasswordPage() {
                 Enter your email and we'll send you a reset link.
               </p>
 
-              {/* Error */}
               {error && (
                 <div
                   style={{
@@ -351,7 +353,6 @@ export default function ForgotPasswordPage() {
                 </div>
               )}
 
-              {/* Form */}
               <div
                 style={{ display: "flex", flexDirection: "column", gap: 20 }}
               >

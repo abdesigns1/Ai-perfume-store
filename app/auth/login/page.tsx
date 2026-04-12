@@ -1,19 +1,21 @@
 "use client";
 
 // app/auth/login/page.tsx
-// Login page — split screen, perfume image left, form right.
-// Wired to Supabase Auth in Phase 6.
+// Login page — wired to Supabase Auth.
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useTheme } from "../../../hooks/useTheme";
 import { useMediaQuery } from "../../../hooks/useMediaQuery";
 import { fonts } from "../../../lib/theme";
+import { signIn, signInWithGoogle } from "../../../lib/auth";
 import GlobalStyles from "../../../components/GlobalStyles";
 
 export default function LoginPage() {
   const { theme: t, toggleTheme } = useTheme(true);
   const isMobile = useMediaQuery("(max-width: 768px)");
+  const router = useRouter();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -28,10 +30,20 @@ export default function LoginPage() {
     }
     setLoading(true);
     setError("");
-    // TODO Phase 6: replace with Supabase auth
-    await new Promise((r) => setTimeout(r, 1200));
+
+    const { error } = await signIn(email, password);
     setLoading(false);
-    setError("Invalid email or password."); // placeholder
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+    router.push("/"); // redirect to home after login
+  };
+
+  const handleGoogle = async () => {
+    const { error } = await signInWithGoogle();
+    if (error) setError(error.message);
   };
 
   return (
@@ -47,14 +59,10 @@ export default function LoginPage() {
     >
       <GlobalStyles theme={t} />
 
-      {/* ── Left: perfume image panel ── */}
+      {/* Left image */}
       {!isMobile && (
         <div
-          style={{
-            flex: "0 0 48%",
-            position: "relative",
-            overflow: "hidden",
-          }}
+          style={{ flex: "0 0 48%", position: "relative", overflow: "hidden" }}
         >
           <div
             style={{
@@ -66,7 +74,6 @@ export default function LoginPage() {
               backgroundPosition: "center",
             }}
           />
-          {/* Overlay */}
           <div
             style={{
               position: "absolute",
@@ -75,8 +82,6 @@ export default function LoginPage() {
                 "linear-gradient(to bottom, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.7) 100%)",
             }}
           />
-
-          {/* Logo + tagline over image */}
           <div
             style={{
               position: "absolute",
@@ -87,7 +92,6 @@ export default function LoginPage() {
               padding: "40px 48px",
             }}
           >
-            {/* Logo */}
             <Link
               href="/"
               style={{
@@ -130,8 +134,6 @@ export default function LoginPage() {
                 SCENTAI
               </span>
             </Link>
-
-            {/* Bottom quote */}
             <div>
               <p
                 style={{
@@ -161,7 +163,7 @@ export default function LoginPage() {
         </div>
       )}
 
-      {/* ── Right: form panel ── */}
+      {/* Right form */}
       <div
         style={{
           flex: 1,
@@ -174,7 +176,6 @@ export default function LoginPage() {
         }}
       >
         <div style={{ width: "100%", maxWidth: 420 }}>
-          {/* Mobile logo */}
           {isMobile && (
             <Link
               href="/"
@@ -219,7 +220,6 @@ export default function LoginPage() {
             </Link>
           )}
 
-          {/* Header */}
           <p
             style={{
               fontFamily: fonts.sans,
@@ -260,7 +260,6 @@ export default function LoginPage() {
             </Link>
           </p>
 
-          {/* Error */}
           {error && (
             <div
               style={{
@@ -277,7 +276,6 @@ export default function LoginPage() {
             </div>
           )}
 
-          {/* Form */}
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <AuthInput
               label="Email Address"
@@ -322,7 +320,6 @@ export default function LoginPage() {
                     color: t.muted,
                     textDecoration: "none",
                     letterSpacing: "0.05em",
-                    transition: "color 0.2s",
                   }}
                   onMouseEnter={(e) =>
                     ((e.currentTarget as HTMLElement).style.color = t.gold)
@@ -336,7 +333,6 @@ export default function LoginPage() {
               </div>
             </div>
 
-            {/* Submit */}
             <button
               onClick={handleSubmit}
               disabled={loading}
@@ -351,7 +347,7 @@ export default function LoginPage() {
                 textTransform: "uppercase",
                 padding: "16px",
                 marginTop: 8,
-                transition: "background 0.2s, transform 0.15s",
+                transition: "background 0.2s",
               }}
               onMouseEnter={(e) => {
                 if (!loading)
@@ -366,7 +362,6 @@ export default function LoginPage() {
               {loading ? "Signing in..." : "Sign In"}
             </button>
 
-            {/* Divider */}
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
               <div style={{ flex: 1, height: 1, background: t.border }} />
               <span
@@ -382,8 +377,8 @@ export default function LoginPage() {
               <div style={{ flex: 1, height: 1, background: t.border }} />
             </div>
 
-            {/* Google OAuth — wired in Phase 6 */}
             <button
+              onClick={handleGoogle}
               style={{
                 background: "none",
                 border: `1px solid ${t.border}`,
@@ -406,12 +401,10 @@ export default function LoginPage() {
                 ((e.currentTarget as HTMLElement).style.borderColor = t.border)
               }
             >
-              <span style={{ fontSize: 16 }}>G</span>
-              Continue with Google
+              <span style={{ fontSize: 16 }}>G</span> Continue with Google
             </button>
           </div>
 
-          {/* Theme toggle */}
           <div style={{ textAlign: "center", marginTop: 48 }}>
             <button
               onClick={toggleTheme}
@@ -434,7 +427,6 @@ export default function LoginPage() {
   );
 }
 
-// ── Reusable input ──────────────────────────────────────────────────────────
 function AuthInput({
   label,
   type,
@@ -467,14 +459,14 @@ function AuthInput({
       >
         {label}
       </label>
-      <div style={{ position: "relative", display: "flex" }}>
+      <div style={{ position: "relative" }}>
         <input
           type={type}
           value={value}
           placeholder={placeholder}
           onChange={(e) => onChange(e.target.value)}
           style={{
-            flex: 1,
+            width: "100%",
             background: t.card,
             border: `1px solid ${t.border}`,
             color: t.text,
@@ -483,7 +475,7 @@ function AuthInput({
             padding: "13px 16px",
             outline: "none",
             transition: "border-color 0.2s",
-            width: "100%",
+            boxSizing: "border-box",
           }}
           onFocus={(e) => (e.currentTarget.style.borderColor = t.gold)}
           onBlur={(e) => (e.currentTarget.style.borderColor = t.border)}

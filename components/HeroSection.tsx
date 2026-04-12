@@ -12,17 +12,18 @@ type Props = { theme: Theme };
 const slides = [
   {
     image:
-      "https://images.unsplash.com/photo-1592945403244-b3fbafd7f539?w=1600&q=85",
-    label: "Oud Noir Collection",
-  },
-  {
-    image:
-      "https://img.freepik.com/premium-photo/cyber-week-banner-featuring-discounted-luxury-perfumes-skincare-neon-pink-lighting-ecommerce-promotions_416256-121589.jpg?semt=ais_incoming&w=740&q=80",
+      "https://media.istockphoto.com/id/1435385078/photo/transparent-perfume-bottle-near-the-aged-weathered-wooden-snag-and-stones-perfume-with-woody.jpg?b=1&s=1024x1024&w=0&k=20&c=uiEm37068r0MR0FonpARvbGu4fYYEwiRz5M434vl1uk=",
     label: "Rose Absolue — Limited Edition",
   },
   {
     image:
-      "https://images.unsplash.com/photo-1563170351-be82bc888aa4?w=1600&q=85",
+      "https://images.unsplash.com/photo-1592945403244-b3fbafd7f539?w=1600&q=85",
+    label: "Oud Noir Collection",
+  },
+
+  {
+    image:
+      "https://static.vecteezy.com/system/resources/previews/035/989/029/large_2x/ai-generated-a-bottle-of-perfume-on-a-blue-background-with-gold-and-black-free-photo.jpg",
     label: "Ambre Céleste — New Arrival",
   },
   {
