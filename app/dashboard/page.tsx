@@ -1,11 +1,12 @@
 "use client";
 
 // app/dashboard/page.tsx
-// Admin dashboard — fixed:
-// 1. Auth guard checks role === 'admin', redirects others
-// 2. Image upload from files via Supabase Storage
-// 3. loadData no longer causes infinite re-render loop
-// 4. Product add/edit properly handles errors
+// Admin dashboard with:
+// - Product gallery image management
+// - Category + Scent type management
+// - In-stock / Out-of-stock toggle
+// - Auth guard with role check
+// - Fixed freeze issue
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
@@ -22,14 +23,23 @@ import {
   adminGetOrders,
   adminGetUsers,
   adminGetCategories,
+  adminGetScentTypes,
   adminAddProduct,
   adminUpdateProduct,
   adminDeleteProduct,
+  adminToggleProductStatus,
   adminUpdateOrderStatus,
-} from "@/lib/adminApi";
+  adminAddCategory,
+  adminDeleteCategory,
+  adminAddScentType,
+  adminDeleteScentType,
+  adminGetProductImages,
+  adminAddProductImage,
+  adminDeleteProductImage,
+} from "../../lib/adminApi";
 import GlobalStyles from "@/components/GlobalStyles";
 
-type Tab = "overview" | "products" | "orders" | "users";
+type Tab = "overview" | "products" | "orders" | "users" | "settings";
 
 const ORDER_STATUSES = [
   "pending",
@@ -45,7 +55,6 @@ const STATUS_COLORS: Record<string, string> = {
   pending: "#888880",
   cancelled: "#e25555",
 };
-
 const EMPTY_FORM = {
   name: "",
   price: "",
@@ -54,6 +63,7 @@ const EMPTY_FORM = {
   description: "",
   image_url: "",
   stock: "",
+  is_active: "true",
 };
 
 export default function DashboardPage() {
@@ -61,7 +71,7 @@ export default function DashboardPage() {
   const isMobile = useMediaQuery("(max-width: 768px)");
   const router = useRouter();
 
-  // ── Auth state ─────────────────────────────────────────────────────────────
+  // Auth
   const [authChecked, setAuthChecked] = useState(false);
   const [adminUser, setAdminUser] = useState<any>(null);
 
@@ -74,22 +84,17 @@ export default function DashboardPage() {
         router.replace("/dashboard/login");
         return;
       }
-
       const { data: profile } = await supabase
         .from("profiles")
         .select("role, full_name, email")
         .eq("id", session.user.id)
         .single();
-
-      // Fallback: check user metadata if profile read fails due to RLS
       const role = profile?.role ?? session.user.user_metadata?.role;
-
       if (role !== "admin") {
         await supabase.auth.signOut();
         router.replace("/dashboard/login");
         return;
       }
-
       setAdminUser({
         ...session.user,
         full_name: profile?.full_name ?? session.user.user_metadata?.full_name,
@@ -97,14 +102,11 @@ export default function DashboardPage() {
         role,
       });
       setAuthChecked(true);
-
-      setAdminUser({ ...session.user, ...profile });
-      setAuthChecked(true);
     };
     checkAdmin();
   }, [router]);
 
-  // ── Data state ─────────────────────────────────────────────────────────────
+  // Data
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [sidebarOpen, setSidebarOpen] = useState(!isMobile);
   const [stats, setStats] = useState({
@@ -117,13 +119,15 @@ export default function DashboardPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
+  const [scentTypes, setScentTypes] = useState<any[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
 
-  // Search / filter
+  // Search/filter
   const [productSearch, setProductSearch] = useState("");
   const [orderSearch, setOrderSearch] = useState("");
   const [userSearch, setUserSearch] = useState("");
   const [orderFilter, setOrderFilter] = useState("All");
+  const [stockFilter, setStockFilter] = useState("All");
 
   // Product modal
   const [modalOpen, setModalOpen] = useState(false);
@@ -136,12 +140,25 @@ export default function DashboardPage() {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Delete confirm
+  // Gallery modal
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [galleryProduct, setGalleryProduct] = useState<any>(null);
+  const [galleryImages, setGalleryImages] = useState<any[]>([]);
+  const [galleryFile, setGalleryFile] = useState<File | null>(null);
+  const [galleryUrl, setGalleryUrl] = useState("");
+  const [galleryLoading, setGalleryLoading] = useState(false);
+  const galleryFileRef = useRef<HTMLInputElement>(null);
+
+  // Settings
+  const [newCategory, setNewCategory] = useState("");
+  const [newScentType, setNewScentType] = useState("");
+  const [settingMsg, setSettingMsg] = useState("");
+
+  // Delete
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
-  // ── Fix #3: use ref to avoid stale closure / infinite loop ─────────────────
+  // Load data once
   const loadedRef = useRef(false);
-
   useEffect(() => {
     if (!authChecked || loadedRef.current) return;
     loadedRef.current = true;
@@ -150,38 +167,30 @@ export default function DashboardPage() {
 
   const loadAllData = async () => {
     setDataLoading(true);
-    const [s, p, o, u, c] = await Promise.all([
+    const [s, p, o, u, c, st] = await Promise.all([
       getOverviewStats(),
       adminGetProducts(),
       adminGetOrders(),
       adminGetUsers(),
       adminGetCategories(),
+      adminGetScentTypes(),
     ]);
     setStats(s);
     setProducts(p);
     setOrders(o);
     setUsers(u);
     setCategories(c);
+    setScentTypes(st);
     setDataLoading(false);
   };
 
   const refreshProducts = async () => {
-    const p = await adminGetProducts();
+    const [p, s] = await Promise.all([adminGetProducts(), getOverviewStats()]);
     setProducts(p);
-    const s = await getOverviewStats();
     setStats(s);
   };
 
-  // ── Image handling ─────────────────────────────────────────────────────────
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImageFile(file);
-    setImagePreview(URL.createObjectURL(file));
-    setForm((f) => ({ ...f, image_url: "" })); // clear URL input
-  };
-
-  // ── Product modal ──────────────────────────────────────────────────────────
+  // Product modal
   const openAddModal = () => {
     setEditProduct(null);
     setForm(EMPTY_FORM);
@@ -201,11 +210,20 @@ export default function DashboardPage() {
       description: p.description ?? "",
       image_url: p.image_url ?? "",
       stock: String(p.stock ?? ""),
+      is_active: String(p.is_active ?? true),
     });
     setImageFile(null);
     setImagePreview(p.image_url ?? "");
     setFormError("");
     setModalOpen(true);
+  };
+
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+    setForm((f) => ({ ...f, image_url: "" }));
   };
 
   const handleSaveProduct = async () => {
@@ -215,8 +233,6 @@ export default function DashboardPage() {
     }
     setFormLoading(true);
     setFormError("");
-
-    // Upload image if a file was selected
     let finalImageUrl = form.image_url;
     if (imageFile) {
       setUploading(true);
@@ -229,7 +245,6 @@ export default function DashboardPage() {
       }
       finalImageUrl = uploaded;
     }
-
     const payload = {
       name: form.name.trim(),
       price: Number(form.price),
@@ -238,21 +253,16 @@ export default function DashboardPage() {
       description: form.description.trim(),
       image_url: finalImageUrl,
       stock: Number(form.stock),
+      is_active: form.is_active === "true",
     };
-
     const result = editProduct
       ? await adminUpdateProduct(editProduct.id, payload)
       : await adminAddProduct(payload);
-
     setFormLoading(false);
-
     if (!result) {
-      setFormError(
-        "Failed to save product. Check that all fields are valid and try again.",
-      );
+      setFormError("Failed to save. Check all fields and try again.");
       return;
     }
-
     setModalOpen(false);
     setImageFile(null);
     setImagePreview("");
@@ -263,6 +273,84 @@ export default function DashboardPage() {
     await adminDeleteProduct(id);
     setDeleteId(null);
     await refreshProducts();
+  };
+
+  const handleToggleStatus = async (id: string, current: boolean) => {
+    await adminToggleProductStatus(id, !current);
+    setProducts((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, is_active: !current } : p)),
+    );
+  };
+
+  // Gallery modal
+  const openGallery = async (product: any) => {
+    setGalleryProduct(product);
+    setGalleryOpen(true);
+    setGalleryLoading(true);
+    const imgs = await adminGetProductImages(product.id);
+    setGalleryImages(imgs);
+    setGalleryLoading(false);
+    setGalleryFile(null);
+    setGalleryUrl("");
+  };
+
+  const handleAddGalleryImage = async () => {
+    if (!galleryProduct) return;
+    setGalleryLoading(true);
+    let url = galleryUrl;
+    if (galleryFile) {
+      const uploaded = await uploadProductImage(galleryFile);
+      if (!uploaded) {
+        setGalleryLoading(false);
+        return;
+      }
+      url = uploaded;
+    }
+    if (!url) {
+      setGalleryLoading(false);
+      return;
+    }
+    await adminAddProductImage(galleryProduct.id, url, galleryImages.length);
+    const imgs = await adminGetProductImages(galleryProduct.id);
+    setGalleryImages(imgs);
+    setGalleryFile(null);
+    setGalleryUrl("");
+    setGalleryLoading(false);
+  };
+
+  const handleDeleteGalleryImage = async (id: string) => {
+    await adminDeleteProductImage(id);
+    setGalleryImages((prev) => prev.filter((img) => img.id !== id));
+  };
+
+  // Settings
+  const handleAddCategory = async () => {
+    if (!newCategory.trim()) return;
+    const result = await adminAddCategory(newCategory.trim());
+    if (result) {
+      setCategories((prev) => [...prev, result]);
+      setNewCategory("");
+      setSettingMsg("Category added!");
+      setTimeout(() => setSettingMsg(""), 2000);
+    }
+  };
+  const handleDeleteCategory = async (id: string) => {
+    await adminDeleteCategory(id);
+    setCategories((prev) => prev.filter((c) => c.id !== id));
+  };
+  const handleAddScentType = async () => {
+    if (!newScentType.trim()) return;
+    const result = await adminAddScentType(newScentType.trim());
+    if (result) {
+      setScentTypes((prev) => [...prev, result]);
+      setNewScentType("");
+      setSettingMsg("Scent type added!");
+      setTimeout(() => setSettingMsg(""), 2000);
+    }
+  };
+  const handleDeleteScentType = async (id: string) => {
+    await adminDeleteScentType(id);
+    setScentTypes((prev) => prev.filter((s) => s.id !== id));
   };
 
   const handleOrderStatus = async (orderId: string, status: string) => {
@@ -277,12 +365,18 @@ export default function DashboardPage() {
     router.push("/dashboard/login");
   };
 
-  // ── Filtered lists ─────────────────────────────────────────────────────────
-  const filteredProducts = products.filter(
-    (p) =>
+  // Filtered
+  const filteredProducts = products.filter((p) => {
+    const matchSearch =
       p.name.toLowerCase().includes(productSearch.toLowerCase()) ||
-      p.category.toLowerCase().includes(productSearch.toLowerCase()),
-  );
+      p.category.toLowerCase().includes(productSearch.toLowerCase());
+    const matchStock =
+      stockFilter === "All" ||
+      (stockFilter === "In Stock"
+        ? p.is_active && p.stock > 0
+        : !p.is_active || p.stock === 0);
+    return matchSearch && matchStock;
+  });
   const filteredOrders = orders.filter((o) => {
     const matchSearch =
       (o.customer_name ?? "")
@@ -304,6 +398,7 @@ export default function DashboardPage() {
     { id: "products", label: "Products", icon: "✦" },
     { id: "orders", label: "Orders", icon: "◎" },
     { id: "users", label: "Users", icon: "◉" },
+    { id: "settings", label: "Settings", icon: "⚙" },
   ];
 
   const displayName = adminUser?.full_name ?? adminUser?.email ?? "Admin";
@@ -314,7 +409,7 @@ export default function DashboardPage() {
     .toUpperCase()
     .slice(0, 2);
 
-  if (!authChecked) {
+  if (!authChecked)
     return (
       <div
         style={{
@@ -338,7 +433,6 @@ export default function DashboardPage() {
         <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
       </div>
     );
-  }
 
   return (
     <div
@@ -372,8 +466,8 @@ export default function DashboardPage() {
               position: "fixed",
               top: "50%",
               left: "50%",
-              transform: "translate(-50%, -50%)",
-              width: "min(580px, 95vw)",
+              transform: "translate(-50%,-50%)",
+              width: "min(580px,95vw)",
               maxHeight: "92vh",
               background: t.bg,
               border: `1px solid ${t.border}`,
@@ -406,7 +500,6 @@ export default function DashboardPage() {
                 ×
               </button>
             </div>
-
             {formError && (
               <div
                 style={{
@@ -422,7 +515,6 @@ export default function DashboardPage() {
                 {formError}
               </div>
             )}
-
             <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
               <FormField
                 label="Product Name *"
@@ -431,7 +523,6 @@ export default function DashboardPage() {
                 placeholder="e.g. Oud Noir"
                 theme={t}
               />
-
               <div
                 style={{
                   display: "grid",
@@ -479,19 +570,51 @@ export default function DashboardPage() {
                     ))}
                   </select>
                 </div>
-                <FormField
-                  label="Scent Type"
-                  value={form.scent_type}
-                  onChange={(v) => setForm((f) => ({ ...f, scent_type: v }))}
-                  placeholder="e.g. Woody"
-                  theme={t}
-                />
+                <div>
+                  <label
+                    style={{
+                      display: "block",
+                      fontFamily: fonts.sans,
+                      fontSize: 10,
+                      letterSpacing: "0.2em",
+                      textTransform: "uppercase",
+                      color: t.muted,
+                      marginBottom: 8,
+                    }}
+                  >
+                    Scent Type
+                  </label>
+                  <select
+                    value={form.scent_type}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, scent_type: e.target.value }))
+                    }
+                    style={{
+                      width: "100%",
+                      background: t.card,
+                      border: `1px solid ${t.border}`,
+                      color: t.text,
+                      fontFamily: fonts.sans,
+                      fontSize: 13,
+                      padding: "12px 14px",
+                      outline: "none",
+                      cursor: "pointer",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <option value="">Select scent type</option>
+                    {scentTypes.map((s) => (
+                      <option key={s.id} value={s.name}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
-
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
+                  gridTemplateColumns: "1fr 1fr 1fr",
                   gap: 16,
                 }}
               >
@@ -511,9 +634,45 @@ export default function DashboardPage() {
                   placeholder="10"
                   theme={t}
                 />
+                <div>
+                  <label
+                    style={{
+                      display: "block",
+                      fontFamily: fonts.sans,
+                      fontSize: 10,
+                      letterSpacing: "0.2em",
+                      textTransform: "uppercase",
+                      color: t.muted,
+                      marginBottom: 8,
+                    }}
+                  >
+                    Status
+                  </label>
+                  <select
+                    value={form.is_active}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, is_active: e.target.value }))
+                    }
+                    style={{
+                      width: "100%",
+                      background: t.card,
+                      border: `1px solid ${t.border}`,
+                      color: form.is_active === "true" ? "#7abf7a" : "#e25555",
+                      fontFamily: fonts.sans,
+                      fontSize: 13,
+                      padding: "12px 14px",
+                      outline: "none",
+                      cursor: "pointer",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <option value="true">In Stock</option>
+                    <option value="false">Out of Stock</option>
+                  </select>
+                </div>
               </div>
 
-              {/* ── Image upload section ── */}
+              {/* Image upload */}
               <div>
                 <label
                   style={{
@@ -526,10 +685,8 @@ export default function DashboardPage() {
                     marginBottom: 10,
                   }}
                 >
-                  Product Image
+                  Main Product Image
                 </label>
-
-                {/* Upload from file */}
                 <div
                   style={{
                     display: "flex",
@@ -550,7 +707,7 @@ export default function DashboardPage() {
                       letterSpacing: "0.15em",
                       textTransform: "uppercase",
                       padding: "10px 18px",
-                      transition: "border-color 0.2s, color 0.2s",
+                      transition: "all 0.2s",
                     }}
                     onMouseEnter={(e) => {
                       (e.currentTarget as HTMLElement).style.borderColor =
@@ -573,7 +730,7 @@ export default function DashboardPage() {
                       alignSelf: "center",
                     }}
                   >
-                    or
+                    or paste URL below
                   </span>
                   <input
                     type="file"
@@ -583,8 +740,6 @@ export default function DashboardPage() {
                     style={{ display: "none" }}
                   />
                 </div>
-
-                {/* URL input */}
                 <FormField
                   label=""
                   value={form.image_url}
@@ -593,11 +748,9 @@ export default function DashboardPage() {
                     setImageFile(null);
                     setImagePreview(v);
                   }}
-                  placeholder="Or paste image URL: https://..."
+                  placeholder="https://..."
                   theme={t}
                 />
-
-                {/* Preview */}
                 {(imagePreview || form.image_url) && (
                   <div
                     style={{
@@ -657,7 +810,6 @@ export default function DashboardPage() {
                           cursor: "pointer",
                           fontFamily: fonts.sans,
                           fontSize: 10,
-                          letterSpacing: "0.1em",
                           padding: 0,
                         }}
                       >
@@ -668,7 +820,6 @@ export default function DashboardPage() {
                 )}
               </div>
 
-              {/* Description */}
               <div>
                 <label
                   style={{
@@ -708,7 +859,6 @@ export default function DashboardPage() {
                 />
               </div>
 
-              {/* Actions */}
               <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
                 <button
                   onClick={() => setModalOpen(false)}
@@ -746,12 +896,292 @@ export default function DashboardPage() {
                   }}
                 >
                   {uploading
-                    ? "Uploading image..."
+                    ? "Uploading..."
                     : formLoading
                       ? "Saving..."
                       : editProduct
                         ? "Save Changes"
                         : "Add Product"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Gallery Modal ── */}
+      {galleryOpen && galleryProduct && (
+        <>
+          <div
+            onClick={() => setGalleryOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.75)",
+              zIndex: 400,
+              backdropFilter: "blur(4px)",
+            }}
+          />
+          <div
+            style={{
+              position: "fixed",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%,-50%)",
+              width: "min(620px,95vw)",
+              maxHeight: "90vh",
+              background: t.bg,
+              border: `1px solid ${t.border}`,
+              zIndex: 401,
+              overflowY: "auto",
+              padding: "36px 40px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 8,
+              }}
+            >
+              <h2 style={{ fontSize: 22, fontWeight: 300 }}>
+                Gallery — {galleryProduct.name}
+              </h2>
+              <button
+                onClick={() => setGalleryOpen(false)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: t.muted,
+                  cursor: "pointer",
+                  fontSize: 22,
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <p
+              style={{
+                fontFamily: fonts.sans,
+                fontSize: 12,
+                color: t.muted,
+                marginBottom: 28,
+              }}
+            >
+              These images appear in the product detail page carousel.
+            </p>
+
+            {/* Existing images */}
+            {galleryLoading ? (
+              <p
+                style={{ fontFamily: fonts.sans, fontSize: 13, color: t.muted }}
+              >
+                Loading...
+              </p>
+            ) : (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
+                  gap: 12,
+                  marginBottom: 28,
+                }}
+              >
+                {/* Main image always first */}
+                <div style={{ position: "relative" }}>
+                  <div
+                    style={{
+                      aspectRatio: "3/4",
+                      overflow: "hidden",
+                      border: `2px solid ${t.gold}`,
+                    }}
+                  >
+                    <img
+                      src={galleryProduct.image_url}
+                      alt="Main"
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                      }}
+                    />
+                  </div>
+                  <span
+                    style={{
+                      fontFamily: fonts.sans,
+                      fontSize: 9,
+                      color: t.gold,
+                      letterSpacing: "0.15em",
+                      textTransform: "uppercase",
+                      display: "block",
+                      textAlign: "center",
+                      marginTop: 4,
+                    }}
+                  >
+                    Main
+                  </span>
+                </div>
+
+                {galleryImages.map((img) => (
+                  <div key={img.id} style={{ position: "relative" }}>
+                    <div
+                      style={{
+                        aspectRatio: "3/4",
+                        overflow: "hidden",
+                        border: `1px solid ${t.border}`,
+                      }}
+                    >
+                      <img
+                        src={img.image_url}
+                        alt="Gallery"
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                        }}
+                        onError={(e) =>
+                          (e.currentTarget.style.display = "none")
+                        }
+                      />
+                    </div>
+                    <button
+                      onClick={() => handleDeleteGalleryImage(img.id)}
+                      style={{
+                        position: "absolute",
+                        top: 4,
+                        right: 4,
+                        background: "rgba(226,85,85,0.9)",
+                        border: "none",
+                        color: "#fff",
+                        cursor: "pointer",
+                        width: 22,
+                        height: 22,
+                        fontSize: 12,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderRadius: "50%",
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add new image */}
+            <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 24 }}>
+              <p
+                style={{
+                  fontFamily: fonts.sans,
+                  fontSize: 10,
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                  color: t.muted,
+                  marginBottom: 14,
+                }}
+              >
+                Add Gallery Image
+              </p>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  marginBottom: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  onClick={() => galleryFileRef.current?.click()}
+                  style={{
+                    background: "none",
+                    border: `1px solid ${t.border}`,
+                    color: t.muted,
+                    cursor: "pointer",
+                    fontFamily: fonts.sans,
+                    fontSize: 10,
+                    letterSpacing: "0.15em",
+                    textTransform: "uppercase",
+                    padding: "10px 18px",
+                    transition: "all 0.2s",
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLElement).style.borderColor = t.gold;
+                    (e.currentTarget as HTMLElement).style.color = t.gold;
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLElement).style.borderColor =
+                      t.border;
+                    (e.currentTarget as HTMLElement).style.color = t.muted;
+                  }}
+                >
+                  📁 Upload File
+                </button>
+                <input
+                  type="file"
+                  ref={galleryFileRef}
+                  accept="image/*"
+                  onChange={(e) => {
+                    setGalleryFile(e.target.files?.[0] ?? null);
+                    setGalleryUrl("");
+                  }}
+                  style={{ display: "none" }}
+                />
+                {galleryFile && (
+                  <span
+                    style={{
+                      fontFamily: fonts.sans,
+                      fontSize: 11,
+                      color: t.gold,
+                      alignSelf: "center",
+                    }}
+                  >
+                    ✓ {galleryFile.name}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 12 }}>
+                <input
+                  type="text"
+                  value={galleryUrl}
+                  placeholder="Or paste image URL"
+                  onChange={(e) => {
+                    setGalleryUrl(e.target.value);
+                    setGalleryFile(null);
+                  }}
+                  style={{
+                    flex: 1,
+                    background: t.card,
+                    border: `1px solid ${t.border}`,
+                    color: t.text,
+                    fontFamily: fonts.sans,
+                    fontSize: 12,
+                    padding: "10px 14px",
+                    outline: "none",
+                    transition: "border-color 0.2s",
+                  }}
+                  onFocus={(e) => (e.currentTarget.style.borderColor = t.gold)}
+                  onBlur={(e) => (e.currentTarget.style.borderColor = t.border)}
+                />
+                <button
+                  onClick={handleAddGalleryImage}
+                  disabled={galleryLoading || (!galleryFile && !galleryUrl)}
+                  style={{
+                    background: t.gold,
+                    color: t.dark ? "#0a0a0a" : "#fff",
+                    border: "none",
+                    cursor: "pointer",
+                    fontFamily: fonts.sans,
+                    fontSize: 10,
+                    letterSpacing: "0.2em",
+                    textTransform: "uppercase",
+                    padding: "10px 20px",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {galleryLoading ? "Adding..." : "Add Image"}
                 </button>
               </div>
             </div>
@@ -777,8 +1207,8 @@ export default function DashboardPage() {
               position: "fixed",
               top: "50%",
               left: "50%",
-              transform: "translate(-50%, -50%)",
-              width: "min(400px, 90vw)",
+              transform: "translate(-50%,-50%)",
+              width: "min(400px,90vw)",
               background: t.bg,
               border: `1px solid ${t.border}`,
               zIndex: 401,
@@ -799,7 +1229,7 @@ export default function DashboardPage() {
                 lineHeight: 1.7,
               }}
             >
-              This cannot be undone. The product will be permanently removed.
+              This cannot be undone.
             </p>
             <div style={{ display: "flex", gap: 12 }}>
               <button
@@ -854,7 +1284,6 @@ export default function DashboardPage() {
           }}
         />
       )}
-
       <aside
         style={
           isMobile
@@ -947,7 +1376,6 @@ export default function DashboardPage() {
             Admin
           </span>
         </div>
-
         <nav style={{ flex: 1, padding: "20px 12px" }}>
           {navItems.map((item) => (
             <button
@@ -1006,7 +1434,6 @@ export default function DashboardPage() {
             </button>
           ))}
         </nav>
-
         <div
           style={{ padding: "16px 12px", borderTop: `1px solid ${t.border}` }}
         >
@@ -1232,25 +1659,21 @@ export default function DashboardPage() {
                         label: "Total Revenue",
                         value: formatPrice(stats.totalRevenue),
                         icon: "₦",
-                        change: "",
                       },
                       {
                         label: "Total Orders",
                         value: stats.totalOrders,
                         icon: "◎",
-                        change: "",
                       },
                       {
                         label: "Products",
                         value: stats.totalProducts,
                         icon: "✦",
-                        change: "",
                       },
                       {
                         label: "Customers",
                         value: stats.totalUsers,
                         icon: "◉",
-                        change: "",
                       },
                     ].map((stat) => (
                       <div
@@ -1296,7 +1719,6 @@ export default function DashboardPage() {
                       </div>
                     ))}
                   </div>
-
                   <div style={{ marginBottom: 40 }}>
                     <div
                       style={{
@@ -1331,7 +1753,6 @@ export default function DashboardPage() {
                       onStatusChange={handleOrderStatus}
                     />
                   </div>
-
                   <div>
                     <h2
                       style={{
@@ -1340,9 +1761,10 @@ export default function DashboardPage() {
                         marginBottom: 20,
                       }}
                     >
-                      Low Stock Alert
+                      Low Stock / Out of Stock
                     </h2>
-                    {products.filter((p) => p.stock <= 6).length === 0 ? (
+                    {products.filter((p) => p.stock <= 6 || !p.is_active)
+                      .length === 0 ? (
                       <p
                         style={{
                           fontFamily: fonts.sans,
@@ -1354,7 +1776,7 @@ export default function DashboardPage() {
                       </p>
                     ) : (
                       products
-                        .filter((p) => p.stock <= 6)
+                        .filter((p) => p.stock <= 6 || !p.is_active)
                         .map((p) => (
                           <div
                             key={p.id}
@@ -1408,17 +1830,21 @@ export default function DashboardPage() {
                               style={{
                                 display: "flex",
                                 alignItems: "center",
-                                gap: 16,
+                                gap: 12,
                               }}
                             >
                               <span
                                 style={{
                                   fontFamily: fonts.sans,
-                                  fontSize: 13,
-                                  color: "#e25555",
+                                  fontSize: 11,
+                                  color: p.is_active ? "#e25555" : t.muted,
+                                  border: `1px solid ${p.is_active ? "#e25555" : t.border}`,
+                                  padding: "3px 10px",
                                 }}
                               >
-                                {p.stock} left
+                                {p.is_active
+                                  ? `${p.stock} left`
+                                  : "Out of Stock"}
                               </span>
                               <span style={{ color: t.gold, fontSize: 14 }}>
                                 {formatPrice(p.price)}
@@ -1444,12 +1870,32 @@ export default function DashboardPage() {
                       gap: 12,
                     }}
                   >
-                    <SearchInput
-                      value={productSearch}
-                      onChange={setProductSearch}
-                      placeholder="Search products..."
-                      theme={t}
-                    />
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                      <SearchInput
+                        value={productSearch}
+                        onChange={setProductSearch}
+                        placeholder="Search products..."
+                        theme={t}
+                      />
+                      <select
+                        value={stockFilter}
+                        onChange={(e) => setStockFilter(e.target.value)}
+                        style={{
+                          background: t.card,
+                          border: `1px solid ${t.border}`,
+                          color: t.text,
+                          fontFamily: fonts.sans,
+                          fontSize: 12,
+                          padding: "10px 14px",
+                          outline: "none",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <option>All</option>
+                        <option>In Stock</option>
+                        <option>Out of Stock</option>
+                      </select>
+                    </div>
                     <button
                       onClick={openAddModal}
                       style={{
@@ -1467,15 +1913,14 @@ export default function DashboardPage() {
                       + Add Product
                     </button>
                   </div>
-
                   <div style={{ display: "flex", flexDirection: "column" }}>
                     {!isMobile && (
                       <div
                         style={{
                           display: "grid",
                           gridTemplateColumns:
-                            "60px 1fr 120px 100px 80px 120px",
-                          gap: 16,
+                            "56px 1fr 110px 90px 70px 90px 160px",
+                          gap: 12,
                           padding: "10px 16px",
                           fontFamily: fonts.sans,
                           fontSize: 9,
@@ -1491,6 +1936,7 @@ export default function DashboardPage() {
                           "Category",
                           "Price",
                           "Stock",
+                          "Status",
                           "Actions",
                         ].map((h) => (
                           <span key={h}>{h}</span>
@@ -1516,10 +1962,10 @@ export default function DashboardPage() {
                           style={{
                             display: "grid",
                             gridTemplateColumns: isMobile
-                              ? "60px 1fr 120px"
-                              : "60px 1fr 120px 100px 80px 120px",
-                            gap: 16,
-                            padding: "14px 16px",
+                              ? "56px 1fr 160px"
+                              : "56px 1fr 110px 90px 70px 90px 160px",
+                            gap: 12,
+                            padding: "12px 16px",
                             borderBottom: `1px solid ${t.border}`,
                             alignItems: "center",
                             background: t.card,
@@ -1561,7 +2007,7 @@ export default function DashboardPage() {
                           <div>
                             <p
                               style={{
-                                fontSize: 16,
+                                fontSize: 15,
                                 fontWeight: 400,
                                 marginBottom: 2,
                               }}
@@ -1592,7 +2038,7 @@ export default function DashboardPage() {
                             </span>
                           )}
                           {!isMobile && (
-                            <span style={{ color: t.gold, fontSize: 14 }}>
+                            <span style={{ color: t.gold, fontSize: 13 }}>
                               {formatPrice(p.price)}
                             </span>
                           )}
@@ -1607,7 +2053,34 @@ export default function DashboardPage() {
                               {p.stock}
                             </span>
                           )}
-                          <div style={{ display: "flex", gap: 8 }}>
+                          {!isMobile && (
+                            <button
+                              onClick={() =>
+                                handleToggleStatus(p.id, p.is_active)
+                              }
+                              style={{
+                                background: "none",
+                                border: `1px solid ${p.is_active ? "#7abf7a" : "#e25555"}`,
+                                color: p.is_active ? "#7abf7a" : "#e25555",
+                                cursor: "pointer",
+                                fontFamily: fonts.sans,
+                                fontSize: 9,
+                                letterSpacing: "0.1em",
+                                textTransform: "uppercase",
+                                padding: "4px 10px",
+                                transition: "all 0.2s",
+                              }}
+                            >
+                              {p.is_active ? "In Stock" : "Out of Stock"}
+                            </button>
+                          )}
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: 6,
+                              flexWrap: "wrap",
+                            }}
+                          >
                             <button
                               onClick={() => openEditModal(p)}
                               style={{
@@ -1618,7 +2091,7 @@ export default function DashboardPage() {
                                 fontFamily: fonts.sans,
                                 fontSize: 9,
                                 letterSpacing: "0.1em",
-                                padding: "5px 10px",
+                                padding: "4px 8px",
                                 transition: "all 0.2s",
                               }}
                               onMouseEnter={(e) => {
@@ -1639,6 +2112,36 @@ export default function DashboardPage() {
                               Edit
                             </button>
                             <button
+                              onClick={() => openGallery(p)}
+                              style={{
+                                background: "none",
+                                border: `1px solid ${t.border}`,
+                                color: t.muted,
+                                cursor: "pointer",
+                                fontFamily: fonts.sans,
+                                fontSize: 9,
+                                letterSpacing: "0.1em",
+                                padding: "4px 8px",
+                                transition: "all 0.2s",
+                              }}
+                              onMouseEnter={(e) => {
+                                (
+                                  e.currentTarget as HTMLElement
+                                ).style.borderColor = t.gold;
+                                (e.currentTarget as HTMLElement).style.color =
+                                  t.gold;
+                              }}
+                              onMouseLeave={(e) => {
+                                (
+                                  e.currentTarget as HTMLElement
+                                ).style.borderColor = t.border;
+                                (e.currentTarget as HTMLElement).style.color =
+                                  t.muted;
+                              }}
+                            >
+                              🖼 Gallery
+                            </button>
+                            <button
                               onClick={() => setDeleteId(p.id)}
                               style={{
                                 background: "none",
@@ -1648,7 +2151,7 @@ export default function DashboardPage() {
                                 fontFamily: fonts.sans,
                                 fontSize: 9,
                                 letterSpacing: "0.1em",
-                                padding: "5px 10px",
+                                padding: "4px 8px",
                               }}
                             >
                               Del
@@ -1769,7 +2272,7 @@ export default function DashboardPage() {
                       <div
                         style={{
                           display: "grid",
-                          gridTemplateColumns: "1fr 200px 150px 100px",
+                          gridTemplateColumns: "1fr 180px 120px 80px 80px",
                           gap: 16,
                           padding: "10px 20px",
                           fontFamily: fonts.sans,
@@ -1780,9 +2283,11 @@ export default function DashboardPage() {
                           borderBottom: `1px solid ${t.border}`,
                         }}
                       >
-                        {["Customer", "Email", "Joined", "Role"].map((h) => (
-                          <span key={h}>{h}</span>
-                        ))}
+                        {["Customer", "Email", "Phone", "Joined", "Role"].map(
+                          (h) => (
+                            <span key={h}>{h}</span>
+                          ),
+                        )}
                       </div>
                     )}
                     {filteredUsers.length === 0 ? (
@@ -1805,7 +2310,7 @@ export default function DashboardPage() {
                             display: "grid",
                             gridTemplateColumns: isMobile
                               ? "1fr 80px"
-                              : "1fr 200px 150px 100px",
+                              : "1fr 180px 120px 80px 80px",
                             gap: 16,
                             padding: "16px 20px",
                             borderBottom: `1px solid ${t.border}`,
@@ -1846,7 +2351,7 @@ export default function DashboardPage() {
                             >
                               {(u.full_name ?? u.email ?? "U")[0].toUpperCase()}
                             </div>
-                            <p style={{ fontSize: 16, fontWeight: 400 }}>
+                            <p style={{ fontSize: 15, fontWeight: 400 }}>
                               {u.full_name ?? "—"}
                             </p>
                           </div>
@@ -1854,7 +2359,7 @@ export default function DashboardPage() {
                             <span
                               style={{
                                 fontFamily: fonts.sans,
-                                fontSize: 12,
+                                fontSize: 11,
                                 color: t.muted,
                               }}
                             >
@@ -1865,7 +2370,18 @@ export default function DashboardPage() {
                             <span
                               style={{
                                 fontFamily: fonts.sans,
-                                fontSize: 12,
+                                fontSize: 11,
+                                color: t.muted,
+                              }}
+                            >
+                              {u.phone ?? "—"}
+                            </span>
+                          )}
+                          {!isMobile && (
+                            <span
+                              style={{
+                                fontFamily: fonts.sans,
+                                fontSize: 11,
                                 color: t.muted,
                               }}
                             >
@@ -1893,6 +2409,259 @@ export default function DashboardPage() {
                         </div>
                       ))
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── SETTINGS ── */}
+              {activeTab === "settings" && (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+                    gap: 32,
+                  }}
+                >
+                  {settingMsg && (
+                    <div
+                      style={{
+                        gridColumn: "1/-1",
+                        background: "rgba(122,191,122,0.15)",
+                        border: "1px solid rgba(122,191,122,0.4)",
+                        padding: "12px 20px",
+                        fontFamily: fonts.sans,
+                        fontSize: 12,
+                        color: "#7abf7a",
+                      }}
+                    >
+                      {settingMsg}
+                    </div>
+                  )}
+
+                  {/* Categories */}
+                  <div
+                    style={{
+                      background: t.card,
+                      border: `1px solid ${t.border}`,
+                      padding: "28px",
+                    }}
+                  >
+                    <h3
+                      style={{ fontSize: 18, fontWeight: 300, marginBottom: 6 }}
+                    >
+                      Categories
+                    </h3>
+                    <p
+                      style={{
+                        fontFamily: fonts.sans,
+                        fontSize: 12,
+                        color: t.muted,
+                        marginBottom: 20,
+                      }}
+                    >
+                      Manage product categories shown in filters.
+                    </p>
+                    <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+                      <input
+                        type="text"
+                        value={newCategory}
+                        placeholder="New category name"
+                        onChange={(e) => setNewCategory(e.target.value)}
+                        onKeyDown={(e) =>
+                          e.key === "Enter" && handleAddCategory()
+                        }
+                        style={{
+                          flex: 1,
+                          background: t.bg,
+                          border: `1px solid ${t.border}`,
+                          color: t.text,
+                          fontFamily: fonts.sans,
+                          fontSize: 12,
+                          padding: "10px 14px",
+                          outline: "none",
+                          transition: "border-color 0.2s",
+                        }}
+                        onFocus={(e) =>
+                          (e.currentTarget.style.borderColor = t.gold)
+                        }
+                        onBlur={(e) =>
+                          (e.currentTarget.style.borderColor = t.border)
+                        }
+                      />
+                      <button
+                        onClick={handleAddCategory}
+                        style={{
+                          background: t.gold,
+                          color: t.dark ? "#0a0a0a" : "#fff",
+                          border: "none",
+                          cursor: "pointer",
+                          fontFamily: fonts.sans,
+                          fontSize: 10,
+                          letterSpacing: "0.2em",
+                          textTransform: "uppercase",
+                          padding: "10px 16px",
+                        }}
+                      >
+                        Add
+                      </button>
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                      }}
+                    >
+                      {categories.map((c) => (
+                        <div
+                          key={c.id}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            padding: "10px 14px",
+                            background: t.subtle,
+                            border: `1px solid ${t.border}`,
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontFamily: fonts.sans,
+                              fontSize: 13,
+                              color: t.text,
+                            }}
+                          >
+                            {c.name}
+                          </span>
+                          <button
+                            onClick={() => handleDeleteCategory(c.id)}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              color: "#e25555",
+                              cursor: "pointer",
+                              fontSize: 16,
+                              lineHeight: 1,
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Scent Types */}
+                  <div
+                    style={{
+                      background: t.card,
+                      border: `1px solid ${t.border}`,
+                      padding: "28px",
+                    }}
+                  >
+                    <h3
+                      style={{ fontSize: 18, fontWeight: 300, marginBottom: 6 }}
+                    >
+                      Scent Types
+                    </h3>
+                    <p
+                      style={{
+                        fontFamily: fonts.sans,
+                        fontSize: 12,
+                        color: t.muted,
+                        marginBottom: 20,
+                      }}
+                    >
+                      Manage scent types shown in product filters.
+                    </p>
+                    <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+                      <input
+                        type="text"
+                        value={newScentType}
+                        placeholder="New scent type"
+                        onChange={(e) => setNewScentType(e.target.value)}
+                        onKeyDown={(e) =>
+                          e.key === "Enter" && handleAddScentType()
+                        }
+                        style={{
+                          flex: 1,
+                          background: t.bg,
+                          border: `1px solid ${t.border}`,
+                          color: t.text,
+                          fontFamily: fonts.sans,
+                          fontSize: 12,
+                          padding: "10px 14px",
+                          outline: "none",
+                          transition: "border-color 0.2s",
+                        }}
+                        onFocus={(e) =>
+                          (e.currentTarget.style.borderColor = t.gold)
+                        }
+                        onBlur={(e) =>
+                          (e.currentTarget.style.borderColor = t.border)
+                        }
+                      />
+                      <button
+                        onClick={handleAddScentType}
+                        style={{
+                          background: t.gold,
+                          color: t.dark ? "#0a0a0a" : "#fff",
+                          border: "none",
+                          cursor: "pointer",
+                          fontFamily: fonts.sans,
+                          fontSize: 10,
+                          letterSpacing: "0.2em",
+                          textTransform: "uppercase",
+                          padding: "10px 16px",
+                        }}
+                      >
+                        Add
+                      </button>
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                      }}
+                    >
+                      {scentTypes.map((s) => (
+                        <div
+                          key={s.id}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            padding: "10px 14px",
+                            background: t.subtle,
+                            border: `1px solid ${t.border}`,
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontFamily: fonts.sans,
+                              fontSize: 13,
+                              color: t.text,
+                            }}
+                          >
+                            {s.name}
+                          </span>
+                          <button
+                            onClick={() => handleDeleteScentType(s.id)}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              color: "#e25555",
+                              cursor: "pointer",
+                              fontSize: 16,
+                              lineHeight: 1,
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
@@ -2068,7 +2837,7 @@ function SearchInput({
           fontSize: 12,
           letterSpacing: "0.05em",
           padding: "10px 40px 10px 16px",
-          width: 280,
+          width: 260,
           outline: "none",
           transition: "border-color 0.2s",
         }}

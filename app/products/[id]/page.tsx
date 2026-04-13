@@ -1,14 +1,21 @@
 "use client";
 
 // app/products/[id]/page.tsx
-// Product detail — fetches real product + related from Supabase.
+// Product detail — real gallery images from DB, wishlist toggle, related limited to 4.
 
 import { useState, useEffect, use } from "react";
 import Link from "next/link";
 import { useTheme } from "../../../hooks/useTheme";
 import { useMediaQuery } from "../../../hooks/useMediaQuery";
 import { useCart } from "../../../lib/cartContext";
-import { getProduct, getRelatedProducts } from "../../../lib/api";
+import { supabase } from "../../../lib/supabase";
+import {
+  getProduct,
+  getRelatedProducts,
+  getProductImages,
+  toggleWishlist,
+  isInWishlist,
+} from "../../../lib/api";
 import { fonts } from "../../../lib/theme";
 import { formatPrice } from "../../../utils/format";
 import type { Product } from "../../../types";
@@ -44,13 +51,6 @@ const mockReviews = [
   },
 ];
 
-const getThumbnails = (mainImage: string) => [
-  mainImage,
-  "https://images.unsplash.com/photo-1563170351-be82bc888aa4?w=400&q=80",
-  "https://images.unsplash.com/photo-1541643600914-78b084683702?w=400&q=80",
-  "https://images.unsplash.com/photo-1587017539504-67cfbddac569?w=400&q=80",
-];
-
 export default function ProductDetailPage({
   params,
 }: {
@@ -63,6 +63,7 @@ export default function ProductDetailPage({
 
   const [product, setProduct] = useState<Product | null>(null);
   const [related, setRelated] = useState<Product[]>([]);
+  const [images, setImages] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeImg, setActiveImg] = useState(0);
   const [quantity, setQuantity] = useState(1);
@@ -70,17 +71,39 @@ export default function ProductDetailPage({
   const [activeTab, setActiveTab] = useState<"details" | "scent" | "shipping">(
     "details",
   );
+  const [wishlisted, setWishlisted] = useState(false);
+  const [wishLoading, setWishLoading] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    getProduct(id).then(async (p) => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUserId(session?.user?.id ?? null);
+    });
+  }, []);
+
+  useEffect(() => {
+    const load = async () => {
+      const p = await getProduct(id);
       setProduct(p);
       setLoading(false);
       if (p) {
-        const rel = await getRelatedProducts(p.category, p.id);
-        setRelated(rel);
+        const [rel, imgs] = await Promise.all([
+          getRelatedProducts(p.category, p.id),
+          getProductImages(id),
+        ]);
+        setRelated(rel.slice(0, 4));
+        // Gallery: main image first, then DB gallery images
+        setImages([p.image_url, ...imgs]);
       }
-    });
+    };
+    load();
   }, [id]);
+
+  useEffect(() => {
+    if (userId && id) {
+      isInWishlist(userId, id).then(setWishlisted);
+    }
+  }, [userId, id]);
 
   const handleAddToCart = () => {
     if (!product) return;
@@ -90,10 +113,27 @@ export default function ProductDetailPage({
     setTimeout(() => setAdded(false), 2000);
   };
 
+  const handleWishlist = async () => {
+    if (!userId) {
+      window.location.href = "/auth/login";
+      return;
+    }
+    if (!product) return;
+    setWishLoading(true);
+    const nowInWishlist = await toggleWishlist(userId, product.id);
+    setWishlisted(nowInWishlist);
+    setWishLoading(false);
+  };
+
   const handleAddRelated = (p: Product) => {
     addItem(p, 1);
     openCart();
   };
+
+  const allImages =
+    images.length > 0 ? images : product ? [product.image_url] : [];
+  const avgRating =
+    mockReviews.reduce((s, r) => s + r.rating, 0) / mockReviews.length;
 
   if (loading) {
     return (
@@ -182,10 +222,6 @@ export default function ProductDetailPage({
     );
   }
 
-  const thumbnails = getThumbnails(product.image_url);
-  const avgRating =
-    mockReviews.reduce((s, r) => s + r.rating, 0) / mockReviews.length;
-
   return (
     <div
       style={{
@@ -241,7 +277,7 @@ export default function ProductDetailPage({
         </div>
       </div>
 
-      {/* Main: gallery + info */}
+      {/* Main */}
       <div
         style={{
           display: "flex",
@@ -262,6 +298,7 @@ export default function ProductDetailPage({
             top: isMobile ? "auto" : 100,
           }}
         >
+          {/* Main image */}
           <div
             style={{
               position: "relative",
@@ -273,7 +310,7 @@ export default function ProductDetailPage({
             }}
           >
             <img
-              src={thumbnails[activeImg]}
+              src={allImages[activeImg]}
               alt={product.name}
               style={{
                 width: "100%",
@@ -281,6 +318,7 @@ export default function ProductDetailPage({
                 objectFit: "cover",
                 transition: "opacity 0.35s ease",
               }}
+              onError={(e) => (e.currentTarget.src = product.image_url)}
             />
             <div
               style={{
@@ -298,97 +336,114 @@ export default function ProductDetailPage({
             >
               {product.category}
             </div>
-            {product.stock !== undefined && product.stock <= 5 && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 16,
-                  right: 16,
-                  background: "rgba(200,60,60,0.85)",
-                  color: "#fff",
-                  fontFamily: fonts.sans,
-                  fontSize: 9,
-                  letterSpacing: "0.15em",
-                  textTransform: "uppercase",
-                  padding: "5px 12px",
-                }}
-              >
-                Only {product.stock} left
-              </div>
+            {product.stock !== undefined &&
+              product.stock <= 5 &&
+              product.stock > 0 && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 16,
+                    right: 16,
+                    background: "rgba(200,60,60,0.85)",
+                    color: "#fff",
+                    fontFamily: fonts.sans,
+                    fontSize: 9,
+                    letterSpacing: "0.15em",
+                    textTransform: "uppercase",
+                    padding: "5px 12px",
+                  }}
+                >
+                  Only {product.stock} left
+                </div>
+              )}
+            {allImages.length > 1 && (
+              <>
+                <button
+                  onClick={() =>
+                    setActiveImg(
+                      (activeImg - 1 + allImages.length) % allImages.length,
+                    )
+                  }
+                  style={{
+                    position: "absolute",
+                    left: 12,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "rgba(0,0,0,0.45)",
+                    border: "none",
+                    color: "#fff",
+                    width: 36,
+                    height: 36,
+                    cursor: "pointer",
+                    fontSize: 18,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backdropFilter: "blur(4px)",
+                  }}
+                >
+                  ‹
+                </button>
+                <button
+                  onClick={() =>
+                    setActiveImg((activeImg + 1) % allImages.length)
+                  }
+                  style={{
+                    position: "absolute",
+                    right: 12,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "rgba(0,0,0,0.45)",
+                    border: "none",
+                    color: "#fff",
+                    width: 36,
+                    height: 36,
+                    cursor: "pointer",
+                    fontSize: 18,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backdropFilter: "blur(4px)",
+                  }}
+                >
+                  ›
+                </button>
+              </>
             )}
-            <button
-              onClick={() =>
-                setActiveImg(
-                  (activeImg - 1 + thumbnails.length) % thumbnails.length,
-                )
-              }
-              style={{
-                position: "absolute",
-                left: 12,
-                top: "50%",
-                transform: "translateY(-50%)",
-                background: "rgba(0,0,0,0.45)",
-                border: "none",
-                color: "#fff",
-                width: 36,
-                height: 36,
-                cursor: "pointer",
-                fontSize: 18,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                backdropFilter: "blur(4px)",
-              }}
-            >
-              ‹
-            </button>
-            <button
-              onClick={() => setActiveImg((activeImg + 1) % thumbnails.length)}
-              style={{
-                position: "absolute",
-                right: 12,
-                top: "50%",
-                transform: "translateY(-50%)",
-                background: "rgba(0,0,0,0.45)",
-                border: "none",
-                color: "#fff",
-                width: 36,
-                height: 36,
-                cursor: "pointer",
-                fontSize: 18,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                backdropFilter: "blur(4px)",
-              }}
-            >
-              ›
-            </button>
           </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            {thumbnails.map((thumb, i) => (
-              <button
-                key={i}
-                onClick={() => setActiveImg(i)}
-                style={{
-                  flex: 1,
-                  aspectRatio: "1",
-                  padding: 0,
-                  cursor: "pointer",
-                  border: `2px solid ${i === activeImg ? t.gold : t.border}`,
-                  overflow: "hidden",
-                  transition: "border-color 0.2s",
-                  background: "none",
-                }}
-              >
-                <img
-                  src={thumb}
-                  alt={`View ${i + 1}`}
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
-              </button>
-            ))}
-          </div>
+
+          {/* Thumbnails */}
+          {allImages.length > 1 && (
+            <div style={{ display: "flex", gap: 10 }}>
+              {allImages.map((img, i) => (
+                <button
+                  key={i}
+                  onClick={() => setActiveImg(i)}
+                  style={{
+                    flex: 1,
+                    aspectRatio: "1",
+                    padding: 0,
+                    cursor: "pointer",
+                    border: `2px solid ${i === activeImg ? t.gold : t.border}`,
+                    overflow: "hidden",
+                    transition: "border-color 0.2s",
+                    background: "none",
+                  }}
+                >
+                  <img
+                    src={img}
+                    alt={`View ${i + 1}`}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "cover",
+                    }}
+                    onError={(e) => (e.currentTarget.src = product.image_url)}
+                  />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Info */}
@@ -426,11 +481,11 @@ export default function ProductDetailPage({
             }}
           >
             <div style={{ display: "flex", gap: 3 }}>
-              {[1, 2, 3, 4, 5].map((star) => (
+              {[1, 2, 3, 4, 5].map((s) => (
                 <span
-                  key={star}
+                  key={s}
                   style={{
-                    color: star <= Math.round(avgRating) ? t.gold : t.border,
+                    color: s <= Math.round(avgRating) ? t.gold : t.border,
                     fontSize: 14,
                   }}
                 >
@@ -522,7 +577,7 @@ export default function ProductDetailPage({
               display: "flex",
               gap: 16,
               alignItems: "center",
-              marginBottom: 20,
+              marginBottom: 16,
               flexWrap: "wrap",
             }}
           >
@@ -603,34 +658,62 @@ export default function ProductDetailPage({
 
           {/* Wishlist + Share */}
           <div style={{ display: "flex", gap: 12, marginBottom: 36 }}>
-            {["♡ Wishlist", "↗ Share"].map((label) => (
-              <button
-                key={label}
-                style={{
-                  flex: 1,
-                  background: "none",
-                  border: `1px solid ${t.border}`,
-                  color: t.muted,
-                  cursor: "pointer",
-                  fontFamily: fonts.sans,
-                  fontSize: 11,
-                  letterSpacing: "0.15em",
-                  textTransform: "uppercase",
-                  padding: "12px 20px",
-                  transition: "border-color 0.2s, color 0.2s",
-                }}
-                onMouseEnter={(e) => {
+            <button
+              onClick={handleWishlist}
+              disabled={wishLoading}
+              style={{
+                flex: 1,
+                background: wishlisted ? t.gold : "none",
+                border: `1px solid ${wishlisted ? t.gold : t.border}`,
+                color: wishlisted ? (t.dark ? "#0a0a0a" : "#fff") : t.muted,
+                cursor: wishLoading ? "not-allowed" : "pointer",
+                fontFamily: fonts.sans,
+                fontSize: 11,
+                letterSpacing: "0.15em",
+                textTransform: "uppercase",
+                padding: "12px 20px",
+                transition: "all 0.2s",
+              }}
+              onMouseEnter={(e) => {
+                if (!wishlisted) {
                   (e.currentTarget as HTMLElement).style.borderColor = t.gold;
                   (e.currentTarget as HTMLElement).style.color = t.gold;
-                }}
-                onMouseLeave={(e) => {
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!wishlisted) {
                   (e.currentTarget as HTMLElement).style.borderColor = t.border;
                   (e.currentTarget as HTMLElement).style.color = t.muted;
-                }}
-              >
-                {label}
-              </button>
-            ))}
+                }
+              }}
+            >
+              {wishlisted ? "♥ Wishlisted" : "♡ Wishlist"}
+            </button>
+            <button
+              style={{
+                flex: 1,
+                background: "none",
+                border: `1px solid ${t.border}`,
+                color: t.muted,
+                cursor: "pointer",
+                fontFamily: fonts.sans,
+                fontSize: 11,
+                letterSpacing: "0.15em",
+                textTransform: "uppercase",
+                padding: "12px 20px",
+                transition: "border-color 0.2s, color 0.2s",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.borderColor = t.gold;
+                (e.currentTarget as HTMLElement).style.color = t.gold;
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.borderColor = t.border;
+                (e.currentTarget as HTMLElement).style.color = t.muted;
+              }}
+            >
+              ↗ Share
+            </button>
           </div>
 
           {/* Tabs */}
@@ -987,7 +1070,7 @@ export default function ProductDetailPage({
         </div>
       </section>
 
-      {/* Related products */}
+      {/* Related */}
       {related.length > 0 && (
         <section style={{ padding: "80px 5vw" }}>
           <div style={{ maxWidth: 1300, margin: "0 auto" }}>

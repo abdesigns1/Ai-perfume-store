@@ -1,7 +1,8 @@
 "use client";
 
 // app/products/page.tsx
-// Product listing — fetches real products + categories from Supabase.
+// Product listing with 12-per-page pagination + prev/next.
+// Sidebar is inside the flex container for correct alignment.
 
 import { useState, useMemo, useEffect } from "react";
 import { useTheme } from "../../hooks/useTheme";
@@ -23,6 +24,8 @@ const SCENT_TYPES = [
   "Earthy",
   "Citrus",
   "Musky",
+  "Spicy",
+  "Fresh",
 ];
 const PRICE_RANGES = [
   { label: "All Prices", min: 0, max: Infinity },
@@ -37,6 +40,7 @@ const SORT_OPTIONS = [
   { label: "Price: High → Low", value: "price-desc" },
   { label: "Name: A → Z", value: "name-asc" },
 ];
+const PER_PAGE = 12;
 
 export default function ProductsPage() {
   const { theme: t, toggleTheme } = useTheme(true);
@@ -52,6 +56,7 @@ export default function ProductsPage() {
   const [sortBy, setSortBy] = useState("featured");
   const [search, setSearch] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     setSidebarOpen(!isMobile);
@@ -65,8 +70,12 @@ export default function ProductsPage() {
     });
   }, []);
 
-  const categoryNames = ["All", ...categories.map((c) => c.name)];
+  // Reset to page 1 whenever filters change
+  useEffect(() => {
+    setPage(1);
+  }, [category, scentType, priceRange, sortBy, search]);
 
+  const categoryNames = ["All", ...categories.map((c) => c.name)];
   const handleAddToCart = (product: Product) => {
     addItem(product, 1);
     openCart();
@@ -90,6 +99,9 @@ export default function ProductsPage() {
     return result;
   }, [products, category, scentType, priceRange, sortBy, search]);
 
+  const totalPages = Math.ceil(filtered.length / PER_PAGE);
+  const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+
   const resetFilters = () => {
     setCategory("All");
     setScentType("All");
@@ -97,9 +109,9 @@ export default function ProductsPage() {
     setSortBy("featured");
     setSearch("");
   };
-
   const hasActiveFilters =
     category !== "All" || scentType !== "All" || priceRange !== 0;
+  const scrollToTop = () => window.scrollTo({ top: 0, behavior: "smooth" });
 
   return (
     <div
@@ -115,7 +127,7 @@ export default function ProductsPage() {
       <div className="grain" />
       <Navbar theme={t} onToggleTheme={toggleTheme} />
 
-      {/* Page header */}
+      {/* ── Page header with background image ── */}
       <div
         style={{
           position: "relative",
@@ -248,8 +260,7 @@ export default function ProductsPage() {
         </div>
       </div>
 
-      {/* Mobile drawer backdrop */}
-      {/* Mobile drawer backdrop */}
+      {/* ── Mobile drawer backdrop ── */}
       {isMobile && sidebarOpen && (
         <div
           onClick={() => setSidebarOpen(false)}
@@ -263,7 +274,7 @@ export default function ProductsPage() {
         />
       )}
 
-      {/* ── Body: sidebar + grid side by side ── */}
+      {/* ── Body: sidebar + grid TOGETHER in one flex container ── */}
       <div
         style={{
           display: "flex",
@@ -274,11 +285,12 @@ export default function ProductsPage() {
           alignItems: "flex-start",
         }}
       >
-        {/* Sidebar — desktop inline, mobile drawer */}
+        {/* ── Sidebar — inside the flex container ── */}
         <aside
           style={
             isMobile
               ? {
+                  // Mobile: fixed drawer
                   position: "fixed",
                   top: 0,
                   left: 0,
@@ -298,6 +310,7 @@ export default function ProductsPage() {
                     : "none",
                 }
               : {
+                  // Desktop: inline collapsible
                   width: sidebarOpen ? 240 : 0,
                   minWidth: sidebarOpen ? 240 : 0,
                   overflow: "hidden",
@@ -308,7 +321,8 @@ export default function ProductsPage() {
                 }
           }
         >
-          <div style={{ width: 240 }}>
+          <div style={{ width: isMobile ? "100%" : 240 }}>
+            {/* Mobile close button */}
             {isMobile && (
               <button
                 onClick={() => setSidebarOpen(false)}
@@ -331,6 +345,8 @@ export default function ProductsPage() {
                 ×
               </button>
             )}
+
+            {/* Sidebar header */}
             <div
               style={{
                 display: "flex",
@@ -367,6 +383,8 @@ export default function ProductsPage() {
                 </button>
               )}
             </div>
+
+            {/* Category */}
             <FilterGroup title="Category">
               {categoryNames.map((cat) => (
                 <FilterChip
@@ -378,14 +396,9 @@ export default function ProductsPage() {
                 />
               ))}
             </FilterGroup>
-            <div
-              style={{
-                height: 1,
-                background: t.border,
-                marginBottom: 28,
-                opacity: 0.5,
-              }}
-            />
+            <Divider color={t.border} />
+
+            {/* Price */}
             <FilterGroup title="Price Range">
               {PRICE_RANGES.map((range, i) => (
                 <RadioRow
@@ -397,14 +410,9 @@ export default function ProductsPage() {
                 />
               ))}
             </FilterGroup>
-            <div
-              style={{
-                height: 1,
-                background: t.border,
-                marginBottom: 28,
-                opacity: 0.5,
-              }}
-            />
+            <Divider color={t.border} />
+
+            {/* Scent type */}
             <FilterGroup title="Scent Type">
               {SCENT_TYPES.map((scent) => (
                 <FilterChip
@@ -419,7 +427,7 @@ export default function ProductsPage() {
           </div>
         </aside>
 
-        {/* Main grid */}
+        {/* ── Main content ── */}
         <div
           style={{ flex: 1, paddingTop: 40, paddingBottom: 80, minWidth: 0 }}
         >
@@ -429,7 +437,7 @@ export default function ProductsPage() {
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
-              marginBottom: 32,
+              marginBottom: 24,
               flexWrap: "wrap",
               gap: 12,
             }}
@@ -560,7 +568,7 @@ export default function ProductsPage() {
               ))}
               <style>{`@keyframes pulse{0%,100%{opacity:.5}50%{opacity:.2}}`}</style>
             </div>
-          ) : filtered.length > 0 ? (
+          ) : paginated.length > 0 ? (
             <div
               style={{
                 display: "grid",
@@ -570,12 +578,12 @@ export default function ProductsPage() {
                 gap: isMobile ? 16 : 24,
               }}
             >
-              {filtered.map((product, i) => (
+              {paginated.map((product, i) => (
                 <ProductCard
                   key={product.id}
                   product={product}
                   theme={t}
-                  animationDelay={i * 0.05}
+                  animationDelay={i * 0.04}
                   onAddToCart={handleAddToCart}
                 />
               ))}
@@ -604,6 +612,141 @@ export default function ProductsPage() {
               </button>
             </div>
           )}
+
+          {/* ── Pagination ── */}
+          {!loading && totalPages > 1 && (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "center",
+                alignItems: "center",
+                gap: 12,
+                marginTop: 56,
+              }}
+            >
+              {/* Prev */}
+              <button
+                onClick={() => {
+                  setPage((p) => Math.max(1, p - 1));
+                  scrollToTop();
+                }}
+                disabled={page === 1}
+                style={{
+                  background: "none",
+                  border: `1px solid ${page === 1 ? t.border : t.gold}`,
+                  color: page === 1 ? t.muted : t.gold,
+                  cursor: page === 1 ? "not-allowed" : "pointer",
+                  fontFamily: fonts.sans,
+                  fontSize: 10,
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                  padding: "10px 20px",
+                  transition: "all 0.2s",
+                  opacity: page === 1 ? 0.4 : 1,
+                }}
+              >
+                ← Prev
+              </button>
+
+              {/* Page numbers with ellipsis */}
+              <div style={{ display: "flex", gap: 8 }}>
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .filter(
+                    (p) =>
+                      p === 1 || p === totalPages || Math.abs(p - page) <= 1,
+                  )
+                  .reduce<(number | "...")[]>((acc, p, idx, arr) => {
+                    if (idx > 0 && p - (arr[idx - 1] as number) > 1)
+                      acc.push("...");
+                    acc.push(p);
+                    return acc;
+                  }, [])
+                  .map((p, i) =>
+                    p === "..." ? (
+                      <span
+                        key={`e-${i}`}
+                        style={{
+                          fontFamily: fonts.sans,
+                          fontSize: 12,
+                          color: t.muted,
+                          padding: "10px 4px",
+                        }}
+                      >
+                        ...
+                      </span>
+                    ) : (
+                      <button
+                        key={p}
+                        onClick={() => {
+                          setPage(p as number);
+                          scrollToTop();
+                        }}
+                        style={{
+                          width: 40,
+                          height: 40,
+                          background: page === p ? t.gold : "none",
+                          color:
+                            page === p
+                              ? t.dark
+                                ? "#0a0a0a"
+                                : "#fff"
+                              : t.muted,
+                          border: `1px solid ${page === p ? t.gold : t.border}`,
+                          cursor: "pointer",
+                          fontFamily: fonts.sans,
+                          fontSize: 12,
+                          transition: "all 0.2s",
+                        }}
+                      >
+                        {p}
+                      </button>
+                    ),
+                  )}
+              </div>
+
+              {/* Next */}
+              <button
+                onClick={() => {
+                  setPage((p) => Math.min(totalPages, p + 1));
+                  scrollToTop();
+                }}
+                disabled={page === totalPages}
+                style={{
+                  background: "none",
+                  border: `1px solid ${page === totalPages ? t.border : t.gold}`,
+                  color: page === totalPages ? t.muted : t.gold,
+                  cursor: page === totalPages ? "not-allowed" : "pointer",
+                  fontFamily: fonts.sans,
+                  fontSize: 10,
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                  padding: "10px 20px",
+                  transition: "all 0.2s",
+                  opacity: page === totalPages ? 0.4 : 1,
+                }}
+              >
+                Next →
+              </button>
+            </div>
+          )}
+
+          {/* Page count info */}
+          {!loading && totalPages > 1 && (
+            <p
+              style={{
+                fontFamily: fonts.sans,
+                fontSize: 11,
+                color: t.muted,
+                textAlign: "center",
+                marginTop: 16,
+                letterSpacing: "0.08em",
+              }}
+            >
+              Showing {(page - 1) * PER_PAGE + 1}–
+              {Math.min(page * PER_PAGE, filtered.length)} of {filtered.length}{" "}
+              fragrances
+            </p>
+          )}
         </div>
       </div>
 
@@ -611,6 +754,8 @@ export default function ProductsPage() {
     </div>
   );
 }
+
+// ── Sub-components ────────────────────────────────────────────────────────────
 
 function FilterGroup({
   title,
@@ -639,6 +784,7 @@ function FilterGroup({
     </div>
   );
 }
+
 function FilterChip({
   label,
   active,
@@ -670,6 +816,7 @@ function FilterChip({
     </button>
   );
 }
+
 function RadioRow({
   label,
   checked,
@@ -735,6 +882,7 @@ function RadioRow({
     </button>
   );
 }
+
 function ActivePill({
   label,
   theme: t,
@@ -775,5 +923,13 @@ function ActivePill({
         ×
       </button>
     </div>
+  );
+}
+
+function Divider({ color }: { color: string }) {
+  return (
+    <div
+      style={{ height: 1, background: color, marginBottom: 28, opacity: 0.5 }}
+    />
   );
 }

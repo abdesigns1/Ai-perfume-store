@@ -259,8 +259,9 @@ export default function Navbar({ theme: t, onToggleTheme }: Props) {
 
                       {/* Menu items */}
                       {[
-                        { label: "My Orders", href: "/orders" },
+                        { label: "My Orders", href: "/account" },
                         { label: "My Account", href: "/account" },
+                        { label: "Wishlist", href: "/account" },
                       ].map((item) => (
                         <Link
                           key={item.label}

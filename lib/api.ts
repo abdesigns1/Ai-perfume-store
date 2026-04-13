@@ -9,10 +9,19 @@ import type { Product, Category, Order } from "../types";
 
 /** Fetch all products */
 export async function getProducts(): Promise<Product[]> {
-  const { data: products, error } = await supabase
+  const { data, error } = await supabase
     .from("products")
     .select(
-      "id, name, price, scent_type, description, image_url, stock, category_id",
+      `
+      id,
+      name,
+      price,
+      scent_type,
+      description,
+      image_url,
+      stock,
+      categories ( name )
+    `,
     )
     .order("created_at", { ascending: false });
 
@@ -21,15 +30,7 @@ export async function getProducts(): Promise<Product[]> {
     return [];
   }
 
-  const { data: categories } = await supabase
-    .from("categories")
-    .select("id, name");
-
-  const catMap = Object.fromEntries(
-    (categories ?? []).map((c) => [c.id, c.name]),
-  );
-
-  return (products ?? []).map((p) => ({
+  return (data ?? []).map((p: any) => ({
     id: p.id,
     name: p.name,
     price: p.price,
@@ -37,7 +38,7 @@ export async function getProducts(): Promise<Product[]> {
     description: p.description,
     image_url: p.image_url,
     stock: p.stock,
-    category: catMap[p.category_id] ?? "Uncategorised",
+    category: p.categories?.name ?? "Uncategorised",
   }));
 }
 
@@ -79,28 +80,23 @@ export async function getProduct(id: string): Promise<Product | null> {
 
 /** Fetch featured products (first 4) */
 export async function getFeaturedProducts(): Promise<Product[]> {
-  const { data: products, error } = await supabase
+  const { data, error } = await supabase
     .from("products")
     .select(
-      "id, name, price, scent_type, description, image_url, stock, category_id",
+      `
+      id, name, price, scent_type, description, image_url, stock,
+      categories ( name )
+    `,
     )
     .limit(4)
     .order("created_at", { ascending: false });
 
   if (error) {
-    console.error("getProducts:", error.message);
+    console.error("getFeaturedProducts:", error.message);
     return [];
   }
 
-  const { data: categories } = await supabase
-    .from("categories")
-    .select("id, name");
-
-  const catMap = Object.fromEntries(
-    (categories ?? []).map((c) => [c.id, c.name]),
-  );
-
-  return (products ?? []).map((p) => ({
+  return (data ?? []).map((p: any) => ({
     id: p.id,
     name: p.name,
     price: p.price,
@@ -108,7 +104,7 @@ export async function getFeaturedProducts(): Promise<Product[]> {
     description: p.description,
     image_url: p.image_url,
     stock: p.stock,
-    category: catMap[p.category_id] ?? "Uncategorised",
+    category: p.categories?.name ?? "Uncategorised",
   }));
 }
 
@@ -117,27 +113,29 @@ export async function getRelatedProducts(
   categoryName: string,
   excludeId: string,
 ): Promise<Product[]> {
-  const { data: products, error } = await supabase
+  const { data: catData } = await supabase
+    .from("categories")
+    .select("id")
+    .eq("name", categoryName)
+    .single();
+
+  if (!catData) return [];
+
+  const { data, error } = await supabase
     .from("products")
     .select(
-      "id, name, price, scent_type, description, image_url, stock, category_id",
+      `id, name, price, scent_type, description, image_url, stock, categories ( name )`,
     )
-    .order("created_at", { ascending: false });
+    .eq("category_id", catData.id)
+    .neq("id", excludeId)
+    .limit(4);
 
   if (error) {
-    console.error("getProducts:", error.message);
+    console.error("getRelatedProducts:", error.message);
     return [];
   }
 
-  const { data: categories } = await supabase
-    .from("categories")
-    .select("id, name");
-
-  const catMap = Object.fromEntries(
-    (categories ?? []).map((c) => [c.id, c.name]),
-  );
-
-  return (products ?? []).map((p) => ({
+  return (data ?? []).map((p: any) => ({
     id: p.id,
     name: p.name,
     price: p.price,
@@ -145,7 +143,7 @@ export async function getRelatedProducts(
     description: p.description,
     image_url: p.image_url,
     stock: p.stock,
-    category: catMap[p.category_id] ?? "Uncategorised",
+    category: p.categories?.name ?? "Uncategorised",
   }));
 }
 
@@ -289,4 +287,57 @@ export async function deleteProduct(id: string) {
     return false;
   }
   return true;
+}
+
+// ── Product gallery images ───────────────────────────────────────────────────
+export async function getProductImages(productId: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("product_images")
+    .select("image_url")
+    .eq("product_id", productId)
+    .order("sort_order");
+  if (error) {
+    console.error("getProductImages:", error.message);
+    return [];
+  }
+  return (data ?? []).map((img: any) => img.image_url);
+}
+
+// ── Wishlist ─────────────────────────────────────────────────────────────────
+export async function toggleWishlist(
+  userId: string,
+  productId: string,
+): Promise<boolean> {
+  // Check if already in wishlist
+  const { data } = await supabase
+    .from("wishlist")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("product_id", productId)
+    .single();
+
+  if (data) {
+    // Remove from wishlist
+    await supabase.from("wishlist").delete().eq("id", data.id);
+    return false; // now not in wishlist
+  } else {
+    // Add to wishlist
+    await supabase
+      .from("wishlist")
+      .insert({ user_id: userId, product_id: productId });
+    return true; // now in wishlist
+  }
+}
+
+export async function isInWishlist(
+  userId: string,
+  productId: string,
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("wishlist")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("product_id", productId)
+    .single();
+  return !!data;
 }
