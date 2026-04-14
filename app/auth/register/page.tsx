@@ -126,7 +126,7 @@ export default function RegisterPage() {
               position: "absolute",
               inset: 0,
               backgroundImage:
-                "url(https://images.unsplash.com/photo-1541643600914-78b084683702?w=1200&q=85)",
+                "url(https://images.pexels.com/photos/7472986/pexels-photo-7472986.jpeg?cs=srgb&dl=pexels-vasilache-stefan-alexandru-45760552-7472986.jpg&fm=jpg)",
               backgroundSize: "cover",
               backgroundPosition: "center",
             }}

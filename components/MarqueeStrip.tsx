@@ -24,7 +24,7 @@ export default function MarqueeStrip({ theme: t }: Props) {
       <div
         style={{
           display: "flex",
-          gap: 64,
+          gap: 50,
           animation: "marquee 18s linear infinite",
           whiteSpace: "nowrap",
           width: "max-content",
@@ -36,7 +36,7 @@ export default function MarqueeStrip({ theme: t }: Props) {
             key={i}
             style={{
               fontFamily: "'Josefin Sans', sans-serif",
-              fontSize: 17,
+              fontSize: 14,
               letterSpacing: "0.3em",
               textTransform: "uppercase",
               color: t.muted,
