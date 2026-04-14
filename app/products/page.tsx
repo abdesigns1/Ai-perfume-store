@@ -63,11 +63,18 @@ export default function ProductsPage() {
   }, [isMobile]);
 
   useEffect(() => {
-    Promise.all([getProducts(), getCategories()]).then(([prods, cats]) => {
-      setProducts(prods);
-      setCategories(cats);
-      setLoading(false);
-    });
+    const timeout = setTimeout(() => setLoading(false), 10000); // 10s failsafe
+    Promise.all([getProducts(), getCategories()])
+      .then(([prods, cats]) => {
+        setProducts(prods);
+        setCategories(cats);
+      })
+      .catch((err) => console.error("Failed to load products:", err))
+      .finally(() => {
+        clearTimeout(timeout);
+        setLoading(false);
+      });
+    return () => clearTimeout(timeout);
   }, []);
 
   // Reset to page 1 whenever filters change

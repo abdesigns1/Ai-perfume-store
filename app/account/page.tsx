@@ -1,7 +1,8 @@
 "use client";
 
 // app/account/page.tsx
-// User account dashboard — Orders, Addresses, Wishlist, Account Settings.
+// User account dashboard — Overview, Orders, Addresses, Wishlist, Settings.
+// Fixed: settings now persist on refresh by always reading from DB on mount.
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
@@ -16,7 +17,7 @@ import GlobalStyles from "../../components/GlobalStyles";
 import Navbar from "../../components/Navbar";
 import Footer from "../../components/Footer";
 
-type Tab = "orders" | "addresses" | "wishlist" | "settings";
+type Tab = "overview" | "orders" | "addresses" | "wishlist" | "settings";
 
 const ORDER_STATUS_COLORS: Record<string, string> = {
   delivered: "#7abf7a",
@@ -32,7 +33,7 @@ export default function AccountPage() {
   const { addItem, openCart } = useCart();
   const router = useRouter();
 
-  const [activeTab, setActiveTab] = useState<Tab>("orders");
+  const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -42,7 +43,7 @@ export default function AccountPage() {
   const [addresses, setAddresses] = useState<any[]>([]);
   const [wishlist, setWishlist] = useState<any[]>([]);
 
-  // Settings form
+  // Settings form — initialised empty, populated from DB
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -65,59 +66,84 @@ export default function AccountPage() {
   const [addrLoading, setAddrLoading] = useState(false);
   const [editAddrId, setEditAddrId] = useState<string | null>(null);
 
-  // Auth guard
+  // ── Auth guard + load all data ─────────────────────────────────────────────
   useEffect(() => {
-    const check = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+    let cancelled = false;
+
+    const load = async () => {
+      // Give Supabase up to 5 seconds to restore session
+      const sessionPromise = supabase.auth.getSession();
+      const timeoutPromise = new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), 5000),
+      );
+
+      const result = await Promise.race([sessionPromise, timeoutPromise]);
+
+      if (cancelled) return;
+
+      // If timeout fired or no session, redirect to login
+      const session = result ? (result as any).data?.session : null;
       if (!session) {
         router.replace("/auth/login");
         return;
       }
+
       setUser(session.user);
 
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", session.user.id)
-        .single();
-      setProfile(prof);
-      setFullName(prof?.full_name ?? "");
-      setPhone(prof?.phone ?? "");
-
-      // Load all data in parallel
-      const [ordersRes, addrRes, wishRes] = await Promise.all([
-        supabase
-          .from("orders")
+      try {
+        const { data: prof } = await supabase
+          .from("profiles")
           .select("*")
-          .eq("user_id", session.user.id)
-          .order("created_at", { ascending: false }),
-        supabase.from("addresses").select("*").eq("user_id", session.user.id),
-        supabase
-          .from("wishlist")
-          .select(
-            "*, products(id, name, price, image_url, scent_type, category_id, categories(name))",
-          )
-          .eq("user_id", session.user.id),
-      ]);
+          .eq("id", session.user.id)
+          .single();
 
-      setOrders(ordersRes.data ?? []);
-      setAddresses(addrRes.data ?? []);
-      setWishlist(
-        (wishRes.data ?? []).map((w: any) => ({
-          ...w,
-          product: w.products
-            ? { ...w.products, category: w.products.categories?.name ?? "" }
-            : null,
-        })),
-      );
-      setLoading(false);
+        if (cancelled) return;
+        setProfile(prof);
+        setFullName(
+          prof?.full_name ?? session.user.user_metadata?.full_name ?? "",
+        );
+        setPhone(prof?.phone ?? "");
+
+        const [ordersRes, addrRes, wishRes] = await Promise.all([
+          supabase
+            .from("orders")
+            .select("*")
+            .eq("user_id", session.user.id)
+            .order("created_at", { ascending: false }),
+          supabase.from("addresses").select("*").eq("user_id", session.user.id),
+          supabase
+            .from("wishlist")
+            .select(
+              "*, products(id, name, price, image_url, scent_type, category_id, categories(name))",
+            )
+            .eq("user_id", session.user.id),
+        ]);
+
+        if (cancelled) return;
+        setOrders(ordersRes.data ?? []);
+        setAddresses(addrRes.data ?? []);
+        setWishlist(
+          (wishRes.data ?? []).map((w: any) => ({
+            ...w,
+            product: w.products
+              ? { ...w.products, category: w.products.categories?.name ?? "" }
+              : null,
+          })),
+        );
+      } catch (err) {
+        console.error("Account load error:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     };
-    check();
+
+    load();
+    return () => {
+      cancelled = true;
+    }; // cleanup on unmount
   }, [router]);
 
-  // Settings save
+  // ── Settings save ──────────────────────────────────────────────────────────
   const handleSaveSettings = async () => {
     if (!fullName.trim()) {
       setSettingError("Full name is required.");
@@ -136,32 +162,48 @@ export default function AccountPage() {
     setSettingError("");
     setSettingMsg("");
 
-    // Update profile
-    await supabase
+    // Update profiles table
+    const { error: profileError } = await supabase
       .from("profiles")
-      .update({ full_name: fullName, phone })
+      .update({ full_name: fullName.trim(), phone: phone.trim() })
       .eq("id", user.id);
+
+    if (profileError) {
+      setSettingError(profileError.message);
+      setSettingLoad(false);
+      return;
+    }
 
     // Update password if provided
     if (newPassword) {
-      const { error } = await supabase.auth.updateUser({
+      const { error: passError } = await supabase.auth.updateUser({
         password: newPassword,
       });
-      if (error) {
-        setSettingError(error.message);
+      if (passError) {
+        setSettingError(passError.message);
         setSettingLoad(false);
         return;
       }
     }
 
+    // Re-fetch profile to confirm save
+    const { data: updated } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .single();
+    setProfile(updated);
+    setFullName(updated?.full_name ?? "");
+    setPhone(updated?.phone ?? "");
+
     setSettingLoad(false);
-    setSettingMsg("Profile updated successfully!");
     setNewPassword("");
     setConfirmPass("");
+    setSettingMsg("Profile updated successfully!");
     setTimeout(() => setSettingMsg(""), 3000);
   };
 
-  // Address save
+  // ── Address helpers ────────────────────────────────────────────────────────
   const handleSaveAddress = async () => {
     if (
       !addrForm.full_name ||
@@ -171,7 +213,6 @@ export default function AccountPage() {
     )
       return;
     setAddrLoading(true);
-
     if (editAddrId) {
       const { data } = await supabase
         .from("addresses")
@@ -188,7 +229,6 @@ export default function AccountPage() {
         .single();
       if (data) setAddresses((prev) => [...prev, data]);
     }
-
     setAddrLoading(false);
     setAddrModal(false);
     setAddrForm({
@@ -220,7 +260,7 @@ export default function AccountPage() {
     setAddrModal(true);
   };
 
-  // Wishlist
+  // ── Wishlist helpers ───────────────────────────────────────────────────────
   const handleRemoveWishlist = async (id: string) => {
     await supabase.from("wishlist").delete().eq("id", id);
     setWishlist((prev) => prev.filter((w) => w.id !== id));
@@ -237,20 +277,32 @@ export default function AccountPage() {
     router.push("/");
   };
 
-  const tabs: { id: Tab; label: string; icon: string }[] = [
-    { id: "orders", label: "My Orders", icon: "◎" },
-    { id: "addresses", label: "Addresses", icon: "⌖" },
-    { id: "wishlist", label: "Wishlist", icon: "♡" },
-    { id: "settings", label: "Settings", icon: "⚙" },
-  ];
-
-  const displayName = profile?.full_name ?? user?.email ?? "User";
+  // ── Computed values ────────────────────────────────────────────────────────
+  const displayName =
+    profile?.full_name ??
+    user?.user_metadata?.full_name ??
+    user?.email ??
+    "User";
   const initials = displayName
     .split(" ")
     .map((n: string) => n[0])
     .join("")
     .toUpperCase()
     .slice(0, 2);
+  const totalSpent = orders
+    .filter((o) => o.status !== "cancelled")
+    .reduce((s: number, o: any) => s + Number(o.total_price), 0);
+  const pendingOrders = orders.filter((o) =>
+    ["pending", "processing", "shipped"].includes(o.status),
+  ).length;
+
+  const tabs: { id: Tab; label: string; icon: string }[] = [
+    { id: "overview", label: "Overview", icon: "◈" },
+    { id: "orders", label: "Orders", icon: "◎" },
+    { id: "addresses", label: "Addresses", icon: "⌖" },
+    { id: "wishlist", label: "Wishlist", icon: "♡" },
+    { id: "settings", label: "Settings", icon: "⚙" },
+  ];
 
   if (loading || !user) {
     return (
@@ -292,7 +344,7 @@ export default function AccountPage() {
       <div className="grain" />
       <Navbar theme={t} onToggleTheme={toggleTheme} />
 
-      {/* Address modal */}
+      {/* ── Address modal ── */}
       {addrModal && (
         <>
           <div
@@ -452,7 +504,7 @@ export default function AccountPage() {
         </>
       )}
 
-      {/* Page header */}
+      {/* ── Page header ── */}
       <div
         style={{
           paddingTop: 96,
@@ -462,13 +514,14 @@ export default function AccountPage() {
         }}
       >
         <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 5vw" }}>
-          {/* User info */}
+          {/* User hero */}
           <div
             style={{
               display: "flex",
               alignItems: "center",
               gap: 20,
               paddingBottom: 28,
+              flexWrap: "wrap",
             }}
           >
             <div
@@ -488,10 +541,10 @@ export default function AccountPage() {
             >
               {initials}
             </div>
-            <div>
+            <div style={{ flex: 1 }}>
               <h1
                 style={{
-                  fontSize: "clamp(20px, 3vw, 28px)",
+                  fontSize: "clamp(18px, 3vw, 26px)",
                   fontWeight: 300,
                   marginBottom: 4,
                 }}
@@ -512,7 +565,6 @@ export default function AccountPage() {
             <button
               onClick={handleSignOut}
               style={{
-                marginLeft: "auto",
                 background: "none",
                 border: `1px solid ${t.border}`,
                 color: t.muted,
@@ -547,7 +599,7 @@ export default function AccountPage() {
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
-                  padding: "14px 24px",
+                  padding: "14px 20px",
                   background: "none",
                   border: "none",
                   borderBottom: `2px solid ${activeTab === tab.id ? t.gold : "transparent"}`,
@@ -562,7 +614,10 @@ export default function AccountPage() {
                 }}
               >
                 <span
-                  style={{ color: activeTab === tab.id ? t.gold : t.muted }}
+                  style={{
+                    color: activeTab === tab.id ? t.gold : t.muted,
+                    fontSize: 13,
+                  }}
                 >
                   {tab.icon}
                 </span>
@@ -601,10 +656,369 @@ export default function AccountPage() {
         </div>
       </div>
 
-      {/* Content */}
+      {/* ── Tab content ── */}
       <div
         style={{ maxWidth: 1100, margin: "0 auto", padding: "40px 5vw 80px" }}
       >
+        {/* ── OVERVIEW ── */}
+        {activeTab === "overview" && (
+          <div>
+            <h2 style={{ fontSize: 22, fontWeight: 300, marginBottom: 32 }}>
+              Account Overview
+            </h2>
+
+            {/* Stats row */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isMobile
+                  ? "repeat(2,1fr)"
+                  : "repeat(4,1fr)",
+                gap: 16,
+                marginBottom: 40,
+              }}
+            >
+              {[
+                { label: "Total Orders", value: orders.length, icon: "◎" },
+                {
+                  label: "Total Spent",
+                  value: formatPrice(totalSpent),
+                  icon: "₦",
+                },
+                { label: "Active Orders", value: pendingOrders, icon: "↻" },
+                { label: "Wishlist Items", value: wishlist.length, icon: "♡" },
+              ].map((stat) => (
+                <div
+                  key={stat.label}
+                  style={{
+                    background: t.card,
+                    border: `1px solid ${t.border}`,
+                    padding: "20px",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "flex-start",
+                      marginBottom: 10,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: fonts.sans,
+                        fontSize: 10,
+                        color: t.muted,
+                        letterSpacing: "0.2em",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      {stat.label}
+                    </span>
+                    <span style={{ color: t.gold, fontSize: 14 }}>
+                      {stat.icon}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: 26, fontWeight: 300, color: t.text }}>
+                    {stat.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Profile summary */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+                gap: 24,
+                marginBottom: 40,
+              }}
+            >
+              {/* Personal info card */}
+              <div
+                style={{
+                  background: t.card,
+                  border: `1px solid ${t.border}`,
+                  padding: "24px 28px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 20,
+                  }}
+                >
+                  <h3 style={{ fontSize: 16, fontWeight: 300 }}>
+                    Personal Info
+                  </h3>
+                  <button
+                    onClick={() => setActiveTab("settings")}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      fontFamily: fonts.sans,
+                      fontSize: 10,
+                      color: t.gold,
+                      cursor: "pointer",
+                      letterSpacing: "0.1em",
+                    }}
+                  >
+                    Edit →
+                  </button>
+                </div>
+                {[
+                  { label: "Name", value: profile?.full_name ?? "—" },
+                  { label: "Email", value: user.email },
+                  { label: "Phone", value: profile?.phone ?? "Not set" },
+                ].map(({ label, value }) => (
+                  <div
+                    key={label}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      paddingBottom: 12,
+                      marginBottom: 12,
+                      borderBottom: `1px solid ${t.border}`,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: fonts.sans,
+                        fontSize: 12,
+                        color: t.muted,
+                      }}
+                    >
+                      {label}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: fonts.sans,
+                        fontSize: 12,
+                        color: t.text,
+                      }}
+                    >
+                      {value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Recent order card */}
+              <div
+                style={{
+                  background: t.card,
+                  border: `1px solid ${t.border}`,
+                  padding: "24px 28px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 20,
+                  }}
+                >
+                  <h3 style={{ fontSize: 16, fontWeight: 300 }}>
+                    Recent Order
+                  </h3>
+                  <button
+                    onClick={() => setActiveTab("orders")}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      fontFamily: fonts.sans,
+                      fontSize: 10,
+                      color: t.gold,
+                      cursor: "pointer",
+                      letterSpacing: "0.1em",
+                    }}
+                  >
+                    View all →
+                  </button>
+                </div>
+                {orders.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "20px 0" }}>
+                    <p
+                      style={{
+                        fontFamily: fonts.sans,
+                        fontSize: 13,
+                        color: t.muted,
+                        marginBottom: 16,
+                      }}
+                    >
+                      No orders yet.
+                    </p>
+                    <Link
+                      href="/products"
+                      style={{
+                        fontFamily: fonts.sans,
+                        fontSize: 10,
+                        letterSpacing: "0.2em",
+                        textTransform: "uppercase",
+                        color: t.gold,
+                        textDecoration: "none",
+                        border: `1px solid ${t.gold}`,
+                        padding: "8px 16px",
+                      }}
+                    >
+                      Shop Now
+                    </Link>
+                  </div>
+                ) : (
+                  (() => {
+                    const latest = orders[0];
+                    return (
+                      <div>
+                        <p
+                          style={{
+                            fontFamily: fonts.sans,
+                            fontSize: 10,
+                            color: t.gold,
+                            letterSpacing: "0.15em",
+                            textTransform: "uppercase",
+                            marginBottom: 8,
+                          }}
+                        >
+                          #{latest.id.slice(0, 8).toUpperCase()}
+                        </p>
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            marginBottom: 8,
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontFamily: fonts.sans,
+                              fontSize: 12,
+                              color: t.muted,
+                            }}
+                          >
+                            {latest.created_at
+                              ? new Date(latest.created_at).toLocaleDateString(
+                                  "en-NG",
+                                  {
+                                    year: "numeric",
+                                    month: "long",
+                                    day: "numeric",
+                                  },
+                                )
+                              : "—"}
+                          </span>
+                          <span style={{ fontSize: 16, color: t.gold }}>
+                            {formatPrice(latest.total_price)}
+                          </span>
+                        </div>
+                        <span
+                          style={{
+                            fontFamily: fonts.sans,
+                            fontSize: 10,
+                            letterSpacing: "0.15em",
+                            textTransform: "uppercase",
+                            color:
+                              ORDER_STATUS_COLORS[latest.status] ?? t.muted,
+                            border: `1px solid ${ORDER_STATUS_COLORS[latest.status] ?? t.border}33`,
+                            padding: "4px 12px",
+                            display: "inline-block",
+                          }}
+                        >
+                          {latest.status}
+                        </span>
+                      </div>
+                    );
+                  })()
+                )}
+              </div>
+            </div>
+
+            {/* Quick actions */}
+            <div>
+              <h3 style={{ fontSize: 16, fontWeight: 300, marginBottom: 16 }}>
+                Quick Actions
+              </h3>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                {[
+                  {
+                    label: "Browse Collection",
+                    href: "/products",
+                    style: "gold",
+                  },
+                  {
+                    label: "View Orders",
+                    action: () => setActiveTab("orders"),
+                    style: "outline",
+                  },
+                  {
+                    label: "Manage Addresses",
+                    action: () => setActiveTab("addresses"),
+                    style: "outline",
+                  },
+                  {
+                    label: "My Wishlist",
+                    action: () => setActiveTab("wishlist"),
+                    style: "outline",
+                  },
+                ].map((item, i) =>
+                  item.href ? (
+                    <Link
+                      key={i}
+                      href={item.href}
+                      style={{
+                        fontFamily: fonts.sans,
+                        fontSize: 10,
+                        letterSpacing: "0.2em",
+                        textTransform: "uppercase",
+                        background: t.gold,
+                        color: t.dark ? "#0a0a0a" : "#fff",
+                        padding: "11px 20px",
+                        textDecoration: "none",
+                        display: "inline-block",
+                        transition: "opacity 0.2s",
+                      }}
+                    >
+                      {item.label}
+                    </Link>
+                  ) : (
+                    <button
+                      key={i}
+                      onClick={item.action}
+                      style={{
+                        fontFamily: fonts.sans,
+                        fontSize: 10,
+                        letterSpacing: "0.2em",
+                        textTransform: "uppercase",
+                        background: "none",
+                        border: `1px solid ${t.border}`,
+                        color: t.muted,
+                        cursor: "pointer",
+                        padding: "11px 20px",
+                        transition: "all 0.2s",
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLElement).style.borderColor =
+                          t.gold;
+                        (e.currentTarget as HTMLElement).style.color = t.gold;
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLElement).style.borderColor =
+                          t.border;
+                        (e.currentTarget as HTMLElement).style.color = t.muted;
+                      }}
+                    >
+                      {item.label}
+                    </button>
+                  ),
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ── ORDERS ── */}
         {activeTab === "orders" && (
           <div>
@@ -733,17 +1147,15 @@ export default function AccountPage() {
                         </span>
                       </div>
                     </div>
-                    <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-                      <span
-                        style={{
-                          fontFamily: fonts.sans,
-                          fontSize: 12,
-                          color: t.muted,
-                        }}
-                      >
-                        Delivery: {order.delivery_method ?? "Standard"}
-                      </span>
-                    </div>
+                    <p
+                      style={{
+                        fontFamily: fonts.sans,
+                        fontSize: 12,
+                        color: t.muted,
+                      }}
+                    >
+                      Delivery: {order.delivery_method ?? "Standard"}
+                    </p>
                   </div>
                 ))}
               </div>
@@ -807,7 +1219,6 @@ export default function AccountPage() {
                     fontFamily: fonts.sans,
                     fontSize: 14,
                     color: t.muted,
-                    marginBottom: 24,
                   }}
                 >
                   No delivery addresses saved yet.
@@ -1023,7 +1434,7 @@ export default function AccountPage() {
                             style={{
                               fontSize: 18,
                               fontWeight: 400,
-                              marginBottom: 10,
+                              marginBottom: 8,
                             }}
                           >
                             {item.product.name}
@@ -1052,7 +1463,6 @@ export default function AccountPage() {
                                 letterSpacing: "0.15em",
                                 textTransform: "uppercase",
                                 padding: "9px 0",
-                                transition: "opacity 0.2s",
                               }}
                             >
                               Add to Cart
@@ -1127,6 +1537,7 @@ export default function AccountPage() {
               </div>
             )}
 
+            {/* Personal info */}
             <div
               style={{
                 background: t.card,
@@ -1206,6 +1617,7 @@ export default function AccountPage() {
               </div>
             </div>
 
+            {/* Password */}
             <div
               style={{
                 background: t.card,
@@ -1327,6 +1739,7 @@ export default function AccountPage() {
   );
 }
 
+// ── Reusable input ─────────────────────────────────────────────────────────
 function AccInput({
   label,
   value,
