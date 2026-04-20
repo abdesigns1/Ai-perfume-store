@@ -226,25 +226,38 @@ export async function adminDeleteScentType(id: string) {
 
 // ── Orders ───────────────────────────────────────────────────────────────────
 export async function adminGetOrders() {
-  const { data, error } = await supabase
+  // First fetch orders
+  const { data: orders, error } = await supabase
     .from("orders")
-    .select(
-      "id, user_id, total_price, status, delivery_method, created_at, profiles(full_name, email)",
-    )
+    .select("id, user_id, total_price, status, delivery_method, created_at")
     .order("created_at", { ascending: false });
+
   if (error) {
     console.error("adminGetOrders:", error.message);
     return [];
   }
-  return (data ?? []).map((o: any) => ({
+
+  // Then fetch profiles separately to avoid join RLS issues
+  const userIds = [...new Set((orders ?? []).map((o: any) => o.user_id))];
+
+  const { data: profiles } = await supabase
+    .from("profiles")
+    .select("id, full_name, email")
+    .in("id", userIds);
+
+  const profileMap = Object.fromEntries(
+    (profiles ?? []).map((p: any) => [p.id, p]),
+  );
+
+  return (orders ?? []).map((o: any) => ({
     id: o.id,
     user_id: o.user_id,
     total_price: o.total_price,
     status: o.status,
     delivery_method: o.delivery_method,
     created_at: o.created_at,
-    customer_name: o.profiles?.full_name ?? "Unknown",
-    customer_email: o.profiles?.email ?? "",
+    customer_name: profileMap[o.user_id]?.full_name ?? "Unknown",
+    customer_email: profileMap[o.user_id]?.email ?? "",
   }));
 }
 

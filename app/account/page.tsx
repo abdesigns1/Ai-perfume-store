@@ -69,6 +69,7 @@ export default function AccountPage() {
   // ── Auth guard + load all data ─────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
+    let cleanup: (() => void) | undefined;
 
     const load = async () => {
       // Give Supabase up to 5 seconds to restore session
@@ -98,6 +99,7 @@ export default function AccountPage() {
           .single();
 
         if (cancelled) return;
+
         setProfile(prof);
         setFullName(
           prof?.full_name ?? session.user.user_metadata?.full_name ?? "",
@@ -120,6 +122,7 @@ export default function AccountPage() {
         ]);
 
         if (cancelled) return;
+
         setOrders(ordersRes.data ?? []);
         setAddresses(addrRes.data ?? []);
         setWishlist(
@@ -135,12 +138,41 @@ export default function AccountPage() {
       } finally {
         if (!cancelled) setLoading(false);
       }
+
+      // ✅ Subscribe to real-time order status updates
+      const channel = supabase
+        .channel("orders-realtime")
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "orders",
+            filter: `user_id=eq.${session.user.id}`,
+          },
+          (payload) => {
+            setOrders((prev) =>
+              prev.map((o) =>
+                o.id === payload.new.id ? { ...o, ...payload.new } : o,
+              ),
+            );
+          },
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
     };
 
-    load();
+    load().then((fn) => {
+      cleanup = fn;
+    });
+
     return () => {
       cancelled = true;
-    }; // cleanup on unmount
+      cleanup?.();
+    };
   }, [router]);
 
   // ── Settings save ──────────────────────────────────────────────────────────

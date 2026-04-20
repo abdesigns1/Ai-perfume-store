@@ -10,12 +10,14 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
+    "@paystack/inline-js": "^2.22.8",
     "@supabase/supabase-js": "^2.103.0",
     "axios": "^1.14.0",
     "next": "^16.2.3",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "react-icons": "^5.6.0"
+    "react-icons": "^5.6.0",
+    "react-paystack": "^6.0.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
