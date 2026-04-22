@@ -341,3 +341,57 @@ export async function isInWishlist(
     .single();
   return !!data;
 }
+
+// ── Reviews ──────────────────────────────────────────────────────────────────
+export async function getProductReviews(productId: string) {
+  const { data, error } = await supabase
+    .from("reviews")
+    .select("id, user_id, display_name, rating, comment, created_at")
+    .eq("product_id", productId)
+    .order("created_at", { ascending: false });
+  if (error) {
+    console.error("getProductReviews:", error.message);
+    return [];
+  }
+  return data ?? [];
+}
+
+export async function getUserReview(productId: string, userId: string) {
+  const { data } = await supabase
+    .from("reviews")
+    .select("*")
+    .eq("product_id", productId)
+    .eq("user_id", userId)
+    .single();
+  return data ?? null;
+}
+
+export async function submitReview(review: {
+  product_id: string;
+  user_id: string;
+  display_name: string;
+  rating: number;
+  comment: string;
+}) {
+  const { data, error } = await supabase
+    .from("reviews")
+    .upsert(review, { onConflict: "user_id,product_id" })
+    .select()
+    .single();
+  if (error) {
+    console.error("submitReview:", error.message);
+    return null;
+  }
+  return data;
+}
+
+export async function checkUserOrdered(
+  userId: string,
+  productId: string,
+): Promise<boolean> {
+  const { data } = await supabase.rpc("user_ordered_product", {
+    p_user_id: userId,
+    p_product_id: productId,
+  });
+  return !!data;
+}

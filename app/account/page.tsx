@@ -13,6 +13,7 @@ import { useCart } from "../../lib/cartContext";
 import { supabase } from "../../lib/supabase";
 import { fonts } from "../../lib/theme";
 import { formatPrice } from "../../utils/format";
+import { getUserReview, submitReview } from "../../lib/api";
 import GlobalStyles from "../../components/GlobalStyles";
 import Navbar from "../../components/Navbar";
 import Footer from "../../components/Footer";
@@ -68,22 +69,10 @@ export default function AccountPage() {
 
   // ── Auth guard + load all data ─────────────────────────────────────────────
   useEffect(() => {
-    let cancelled = false;
-    let cleanup: (() => void) | undefined;
-
     const load = async () => {
-      // Give Supabase up to 5 seconds to restore session
-      const sessionPromise = supabase.auth.getSession();
-      const timeoutPromise = new Promise<null>((resolve) =>
-        setTimeout(() => resolve(null), 5000),
-      );
-
-      const result = await Promise.race([sessionPromise, timeoutPromise]);
-
-      if (cancelled) return;
-
-      // If timeout fired or no session, redirect to login
-      const session = result ? (result as any).data?.session : null;
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       if (!session) {
         router.replace("/auth/login");
         return;
@@ -91,88 +80,62 @@ export default function AccountPage() {
 
       setUser(session.user);
 
-      try {
-        const { data: prof } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", session.user.id)
-          .single();
+      // Always fetch fresh profile from DB — fixes the disappearing settings bug
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", session.user.id)
+        .single();
 
-        if (cancelled) return;
+      setProfile(prof);
+      setFullName(
+        prof?.full_name ?? session.user.user_metadata?.full_name ?? "",
+      );
+      setPhone(prof?.phone ?? "");
 
-        setProfile(prof);
-        setFullName(
-          prof?.full_name ?? session.user.user_metadata?.full_name ?? "",
-        );
-        setPhone(prof?.phone ?? "");
+      const [ordersRes, addrRes, wishRes] = await Promise.all([
+        supabase
+          .from("orders")
+          .select(
+            "*, order_items(id, product_id, quantity, products(id, name, price, image_url, scent_type, categories(name)))",
+          )
+          .eq("user_id", session.user.id)
+          .order("created_at", { ascending: false }),
+        supabase.from("addresses").select("*").eq("user_id", session.user.id),
+        supabase
+          .from("wishlist")
+          .select(
+            "*, products(id, name, price, image_url, scent_type, category_id, categories(name))",
+          )
+          .eq("user_id", session.user.id),
+      ]);
 
-        const [ordersRes, addrRes, wishRes] = await Promise.all([
-          supabase
-            .from("orders")
-            .select("*")
-            .eq("user_id", session.user.id)
-            .order("created_at", { ascending: false }),
-          supabase.from("addresses").select("*").eq("user_id", session.user.id),
-          supabase
-            .from("wishlist")
-            .select(
-              "*, products(id, name, price, image_url, scent_type, category_id, categories(name))",
-            )
-            .eq("user_id", session.user.id),
-        ]);
-
-        if (cancelled) return;
-
-        setOrders(ordersRes.data ?? []);
-        setAddresses(addrRes.data ?? []);
-        setWishlist(
-          (wishRes.data ?? []).map((w: any) => ({
-            ...w,
-            product: w.products
-              ? { ...w.products, category: w.products.categories?.name ?? "" }
+      setOrders(
+        (ordersRes.data ?? []).map((o: any) => ({
+          ...o,
+          items: (o.order_items ?? []).map((item: any) => ({
+            ...item,
+            product: item.products
+              ? {
+                  ...item.products,
+                  category: item.products.categories?.name ?? "",
+                }
               : null,
           })),
-        );
-      } catch (err) {
-        console.error("Account load error:", err);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-
-      // ✅ Subscribe to real-time order status updates
-      const channel = supabase
-        .channel("orders-realtime")
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "orders",
-            filter: `user_id=eq.${session.user.id}`,
-          },
-          (payload) => {
-            setOrders((prev) =>
-              prev.map((o) =>
-                o.id === payload.new.id ? { ...o, ...payload.new } : o,
-              ),
-            );
-          },
-        )
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
+        })),
+      );
+      setAddresses(addrRes.data ?? []);
+      setWishlist(
+        (wishRes.data ?? []).map((w: any) => ({
+          ...w,
+          product: w.products
+            ? { ...w.products, category: w.products.categories?.name ?? "" }
+            : null,
+        })),
+      );
+      setLoading(false);
     };
-
-    load().then((fn) => {
-      cleanup = fn;
-    });
-
-    return () => {
-      cancelled = true;
-      cleanup?.();
-    };
+    load();
   }, [router]);
 
   // ── Settings save ──────────────────────────────────────────────────────────
@@ -1095,100 +1058,17 @@ export default function AccountPage() {
               </div>
             ) : (
               <div
-                style={{ display: "flex", flexDirection: "column", gap: 16 }}
+                style={{ display: "flex", flexDirection: "column", gap: 24 }}
               >
                 {orders.map((order) => (
-                  <div
+                  <OrderCard
                     key={order.id}
-                    style={{
-                      background: t.card,
-                      border: `1px solid ${t.border}`,
-                      padding: "24px 28px",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "flex-start",
-                        flexWrap: "wrap",
-                        gap: 12,
-                        marginBottom: 16,
-                      }}
-                    >
-                      <div>
-                        <p
-                          style={{
-                            fontFamily: fonts.sans,
-                            fontSize: 10,
-                            color: t.gold,
-                            letterSpacing: "0.15em",
-                            textTransform: "uppercase",
-                            marginBottom: 4,
-                          }}
-                        >
-                          Order #{order.id.slice(0, 8).toUpperCase()}
-                        </p>
-                        <p
-                          style={{
-                            fontFamily: fonts.sans,
-                            fontSize: 12,
-                            color: t.muted,
-                          }}
-                        >
-                          {order.created_at
-                            ? new Date(order.created_at).toLocaleDateString(
-                                "en-NG",
-                                {
-                                  year: "numeric",
-                                  month: "long",
-                                  day: "numeric",
-                                },
-                              )
-                            : "—"}
-                        </p>
-                      </div>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 16,
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: 20,
-                            fontWeight: 400,
-                            color: t.gold,
-                          }}
-                        >
-                          {formatPrice(order.total_price)}
-                        </span>
-                        <span
-                          style={{
-                            fontFamily: fonts.sans,
-                            fontSize: 10,
-                            letterSpacing: "0.15em",
-                            textTransform: "uppercase",
-                            color: ORDER_STATUS_COLORS[order.status] ?? t.muted,
-                            border: `1px solid ${ORDER_STATUS_COLORS[order.status] ?? t.border}33`,
-                            padding: "4px 12px",
-                          }}
-                        >
-                          {order.status}
-                        </span>
-                      </div>
-                    </div>
-                    <p
-                      style={{
-                        fontFamily: fonts.sans,
-                        fontSize: 12,
-                        color: t.muted,
-                      }}
-                    >
-                      Delivery: {order.delivery_method ?? "Standard"}
-                    </p>
-                  </div>
+                    order={order}
+                    userId={user.id}
+                    theme={t}
+                    isMobile={isMobile}
+                    profile={profile}
+                  />
                 ))}
               </div>
             )}
@@ -1767,6 +1647,584 @@ export default function AccountPage() {
       </div>
 
       <Footer theme={t} />
+    </div>
+  );
+}
+
+// ── OrderCard — shows order items + inline review per product ────────────────
+function OrderCard({
+  order,
+  userId,
+  theme: t,
+  isMobile,
+  profile,
+}: {
+  order: any;
+  userId: string;
+  theme: any;
+  isMobile: boolean;
+  profile: any;
+}) {
+  const canReview = ["delivered", "processing", "shipped"].includes(
+    order.status,
+  );
+  const [expandedProductId, setExpandedProductId] = useState<string | null>(
+    null,
+  );
+  const [userReviews, setUserReviews] = useState<Record<string, any>>({});
+  const [reviewForms, setReviewForms] = useState<
+    Record<string, { rating: number; name: string; comment: string }>
+  >({});
+  const [hoverRating, setHoverRating] = useState<Record<string, number>>({});
+  const [submitting, setSubmitting] = useState<Record<string, boolean>>({});
+  const [messages, setMessages] = useState<
+    Record<string, { type: "success" | "error"; text: string }>
+  >({});
+
+  // Load existing reviews for all products in this order
+  useEffect(() => {
+    if (!canReview || !order.items?.length) return;
+    order.items.forEach(async (item: any) => {
+      if (!item.product) return;
+      const existing = await getUserReview(item.product.id, userId);
+      if (existing) {
+        setUserReviews((prev) => ({ ...prev, [item.product.id]: existing }));
+        setReviewForms((prev) => ({
+          ...prev,
+          [item.product.id]: {
+            rating: existing.rating,
+            name: existing.display_name,
+            comment: existing.comment,
+          },
+        }));
+      } else {
+        setReviewForms((prev) => ({
+          ...prev,
+          [item.product.id]: {
+            rating: 5,
+            name: profile?.full_name ?? "",
+            comment: "",
+          },
+        }));
+      }
+    });
+  }, [order.id, canReview]);
+
+  const openForm = (productId: string) => {
+    setExpandedProductId((prev) => (prev === productId ? null : productId));
+    setMessages((prev) => ({ ...prev, [productId]: undefined as any }));
+  };
+
+  const handleSubmit = async (productId: string) => {
+    const form = reviewForms[productId];
+    if (!form?.name?.trim()) {
+      setMessages((prev) => ({
+        ...prev,
+        [productId]: { type: "error", text: "Please enter your display name." },
+      }));
+      return;
+    }
+    if (!form?.comment?.trim() || form.comment.trim().length < 10) {
+      setMessages((prev) => ({
+        ...prev,
+        [productId]: {
+          type: "error",
+          text: "Comment must be at least 10 characters.",
+        },
+      }));
+      return;
+    }
+
+    setSubmitting((prev) => ({ ...prev, [productId]: true }));
+    const result = await submitReview({
+      product_id: productId,
+      user_id: userId,
+      display_name: form.name.trim(),
+      rating: form.rating,
+      comment: form.comment.trim(),
+    });
+    setSubmitting((prev) => ({ ...prev, [productId]: false }));
+
+    if (!result) {
+      setMessages((prev) => ({
+        ...prev,
+        [productId]: {
+          type: "error",
+          text: "Failed to submit. Please try again.",
+        },
+      }));
+      return;
+    }
+
+    setUserReviews((prev) => ({ ...prev, [productId]: result }));
+    setExpandedProductId(null);
+    setMessages((prev) => ({
+      ...prev,
+      [productId]: {
+        type: "success",
+        text: userReviews[productId]
+          ? "Review updated!"
+          : "Review submitted! Thank you.",
+      },
+    }));
+    setTimeout(
+      () =>
+        setMessages((prev) => {
+          const n = { ...prev };
+          delete n[productId];
+          return n;
+        }),
+      4000,
+    );
+  };
+
+  return (
+    <div style={{ background: t.card, border: `1px solid ${t.border}` }}>
+      {/* Order header */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          flexWrap: "wrap",
+          gap: 12,
+          padding: "20px 24px",
+          borderBottom: `1px solid ${t.border}`,
+        }}
+      >
+        <div>
+          <p
+            style={{
+              fontFamily: fonts.sans,
+              fontSize: 10,
+              color: t.gold,
+              letterSpacing: "0.15em",
+              textTransform: "uppercase",
+              marginBottom: 4,
+            }}
+          >
+            Order #{order.id.slice(0, 8).toUpperCase()}
+          </p>
+          <p style={{ fontFamily: fonts.sans, fontSize: 12, color: t.muted }}>
+            {order.created_at
+              ? new Date(order.created_at).toLocaleDateString("en-NG", {
+                  year: "numeric",
+                  month: "long",
+                  day: "numeric",
+                })
+              : "—"}
+            {order.delivery_method && <> · {order.delivery_method} delivery</>}
+          </p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 18, fontWeight: 400, color: t.gold }}>
+            {formatPrice(order.total_price)}
+          </span>
+          <span
+            style={{
+              fontFamily: fonts.sans,
+              fontSize: 10,
+              letterSpacing: "0.15em",
+              textTransform: "uppercase",
+              color: ORDER_STATUS_COLORS[order.status] ?? t.muted,
+              border: `1px solid ${(ORDER_STATUS_COLORS[order.status] ?? "#888") + "44"}`,
+              padding: "4px 12px",
+            }}
+          >
+            {order.status}
+          </span>
+        </div>
+      </div>
+
+      {/* Order items */}
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        {(order.items ?? []).map((item: any) => {
+          if (!item.product) return null;
+          const p = item.product;
+          const reviewed = userReviews[p.id];
+          const form = reviewForms[p.id] ?? {
+            rating: 5,
+            name: profile?.full_name ?? "",
+            comment: "",
+          };
+          const isExpanded = expandedProductId === p.id;
+          const msg = messages[p.id];
+          const isSubmitting = submitting[p.id];
+          const hover = hoverRating[p.id] ?? 0;
+
+          return (
+            <div
+              key={item.id}
+              style={{ borderBottom: `1px solid ${t.border}` }}
+            >
+              {/* Product row */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 16,
+                  padding: "16px 24px",
+                  flexWrap: "wrap",
+                }}
+              >
+                {/* Image */}
+                <Link
+                  href={`/products/${p.id}`}
+                  style={{ textDecoration: "none", flexShrink: 0 }}
+                >
+                  <div
+                    style={{
+                      width: 56,
+                      height: 68,
+                      overflow: "hidden",
+                      border: `1px solid ${t.border}`,
+                    }}
+                  >
+                    <img
+                      src={p.image_url}
+                      alt={p.name}
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                      }}
+                    />
+                  </div>
+                </Link>
+
+                {/* Name + qty */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p
+                    style={{
+                      fontFamily: fonts.sans,
+                      fontSize: 9,
+                      color: t.gold,
+                      letterSpacing: "0.2em",
+                      textTransform: "uppercase",
+                      marginBottom: 4,
+                    }}
+                  >
+                    {p.category || p.scent_type}
+                  </p>
+                  <Link
+                    href={`/products/${p.id}`}
+                    style={{ textDecoration: "none" }}
+                  >
+                    <p
+                      style={{
+                        fontSize: 15,
+                        fontWeight: 400,
+                        color: t.text,
+                        marginBottom: 4,
+                      }}
+                    >
+                      {p.name}
+                    </p>
+                  </Link>
+                  <p
+                    style={{
+                      fontFamily: fonts.sans,
+                      fontSize: 11,
+                      color: t.muted,
+                    }}
+                  >
+                    Qty: {item.quantity} ·{" "}
+                    {formatPrice(p.price * item.quantity)}
+                  </p>
+
+                  {/* Show existing review stars */}
+                  {reviewed && (
+                    <div style={{ display: "flex", gap: 2, marginTop: 6 }}>
+                      {[1, 2, 3, 4, 5].map((s) => (
+                        <span
+                          key={s}
+                          style={{
+                            fontSize: 12,
+                            color: s <= reviewed.rating ? t.gold : t.border,
+                          }}
+                        >
+                          ★
+                        </span>
+                      ))}
+                      <span
+                        style={{
+                          fontFamily: fonts.sans,
+                          fontSize: 10,
+                          color: t.muted,
+                          marginLeft: 4,
+                        }}
+                      >
+                        Your review
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Review CTA — only for eligible orders */}
+                {canReview && (
+                  <div
+                    style={{
+                      flexShrink: 0,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-end",
+                      gap: 6,
+                    }}
+                  >
+                    {msg && (
+                      <p
+                        style={{
+                          fontFamily: fonts.sans,
+                          fontSize: 10,
+                          color: msg.type === "success" ? "#7abf7a" : "#e25555",
+                        }}
+                      >
+                        {msg.text}
+                      </p>
+                    )}
+                    <button
+                      onClick={() => openForm(p.id)}
+                      style={{
+                        background: isExpanded ? t.subtle : "none",
+                        border: `1px solid ${isExpanded ? t.gold : t.border}`,
+                        color: isExpanded ? t.gold : t.muted,
+                        cursor: "pointer",
+                        fontFamily: fonts.sans,
+                        fontSize: 9,
+                        letterSpacing: "0.2em",
+                        textTransform: "uppercase",
+                        padding: "6px 14px",
+                        transition: "all 0.2s",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {reviewed
+                        ? isExpanded
+                          ? "Close"
+                          : "Edit Review"
+                        : isExpanded
+                          ? "Close"
+                          : "Write Review"}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Inline review form */}
+              {isExpanded && canReview && (
+                <div
+                  style={{
+                    padding: "20px 24px",
+                    background: t.subtle,
+                    borderTop: `1px solid ${t.border}`,
+                  }}
+                >
+                  <p
+                    style={{
+                      fontFamily: fonts.sans,
+                      fontSize: 10,
+                      letterSpacing: "0.2em",
+                      textTransform: "uppercase",
+                      color: t.muted,
+                      marginBottom: 16,
+                    }}
+                  >
+                    {reviewed ? "Update your review" : "Share your experience"}
+                  </p>
+
+                  {/* Star picker */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      marginBottom: 16,
+                    }}
+                  >
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                        onClick={() =>
+                          setReviewForms((prev) => ({
+                            ...prev,
+                            [p.id]: { ...form, rating: star },
+                          }))
+                        }
+                        onMouseEnter={() =>
+                          setHoverRating((prev) => ({ ...prev, [p.id]: star }))
+                        }
+                        onMouseLeave={() =>
+                          setHoverRating((prev) => ({ ...prev, [p.id]: 0 }))
+                        }
+                        style={{
+                          background: "none",
+                          border: "none",
+                          cursor: "pointer",
+                          fontSize: 26,
+                          color:
+                            star <= (hover || form.rating) ? t.gold : t.border,
+                          transition: "color 0.15s",
+                          padding: 0,
+                          lineHeight: 1,
+                        }}
+                      >
+                        ★
+                      </button>
+                    ))}
+                    <span
+                      style={{
+                        fontFamily: fonts.sans,
+                        fontSize: 11,
+                        color: t.muted,
+                        marginLeft: 4,
+                      }}
+                    >
+                      {
+                        [
+                          "",
+                          "Terrible",
+                          "Poor",
+                          "Average",
+                          "Good",
+                          "Excellent",
+                        ][hover || form.rating]
+                      }
+                    </span>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 12,
+                    }}
+                  >
+                    {/* Display name */}
+                    <input
+                      type="text"
+                      value={form.name}
+                      placeholder="Your display name"
+                      onChange={(e) =>
+                        setReviewForms((prev) => ({
+                          ...prev,
+                          [p.id]: { ...form, name: e.target.value },
+                        }))
+                      }
+                      style={{
+                        width: "100%",
+                        background: t.bg,
+                        border: `1px solid ${t.border}`,
+                        color: t.text,
+                        fontFamily: fonts.sans,
+                        fontSize: 12,
+                        padding: "10px 14px",
+                        outline: "none",
+                        transition: "border-color 0.2s",
+                        boxSizing: "border-box",
+                      }}
+                      onFocus={(e) =>
+                        (e.currentTarget.style.borderColor = t.gold)
+                      }
+                      onBlur={(e) =>
+                        (e.currentTarget.style.borderColor = t.border)
+                      }
+                    />
+
+                    {/* Comment */}
+                    <textarea
+                      value={form.comment}
+                      placeholder="Share your thoughts about this fragrance... (min. 10 characters)"
+                      rows={3}
+                      onChange={(e) =>
+                        setReviewForms((prev) => ({
+                          ...prev,
+                          [p.id]: { ...form, comment: e.target.value },
+                        }))
+                      }
+                      style={{
+                        width: "100%",
+                        background: t.bg,
+                        border: `1px solid ${t.border}`,
+                        color: t.text,
+                        fontFamily: fonts.sans,
+                        fontSize: 12,
+                        padding: "10px 14px",
+                        outline: "none",
+                        resize: "vertical",
+                        boxSizing: "border-box",
+                        transition: "border-color 0.2s",
+                      }}
+                      onFocus={(e) =>
+                        (e.currentTarget.style.borderColor = t.gold)
+                      }
+                      onBlur={(e) =>
+                        (e.currentTarget.style.borderColor = t.border)
+                      }
+                    />
+
+                    {/* Error */}
+                    {msg?.type === "error" && (
+                      <p
+                        style={{
+                          fontFamily: fonts.sans,
+                          fontSize: 11,
+                          color: "#e25555",
+                        }}
+                      >
+                        {msg.text}
+                      </p>
+                    )}
+
+                    {/* Actions */}
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button
+                        onClick={() => setExpandedProductId(null)}
+                        style={{
+                          flex: 1,
+                          background: "none",
+                          border: `1px solid ${t.border}`,
+                          color: t.muted,
+                          cursor: "pointer",
+                          fontFamily: fonts.sans,
+                          fontSize: 10,
+                          letterSpacing: "0.2em",
+                          textTransform: "uppercase",
+                          padding: "10px",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => handleSubmit(p.id)}
+                        disabled={isSubmitting}
+                        style={{
+                          flex: 2,
+                          background: isSubmitting ? t.border : t.gold,
+                          color: t.dark ? "#0a0a0a" : "#fff",
+                          border: "none",
+                          cursor: isSubmitting ? "not-allowed" : "pointer",
+                          fontFamily: fonts.sans,
+                          fontSize: 10,
+                          letterSpacing: "0.2em",
+                          textTransform: "uppercase",
+                          padding: "10px",
+                          transition: "background 0.2s",
+                        }}
+                      >
+                        {isSubmitting
+                          ? "Submitting..."
+                          : reviewed
+                            ? "Update Review"
+                            : "Submit Review"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

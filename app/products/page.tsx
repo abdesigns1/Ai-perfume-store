@@ -150,7 +150,7 @@ export default function ProductsPage() {
             position: "absolute",
             inset: 0,
             backgroundImage:
-              "url(https://images.unsplash.com/photo-1587017539504-67cfbddac569?w=1600&q=85)",
+              "url(https://images.unsplash.com/photo-1615634260167-c8cdede054de?q=80&w=1932&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D)",
             backgroundSize: "cover",
             backgroundPosition: "center 30%",
             zIndex: 0,

@@ -127,6 +127,9 @@ RULES:
 - Keep responses warm and concise — 2–4 sentences before recommendations
 - Use ₦ for Nigerian Naira prices
 - Never make up products or prices
+- Prioritize diversity in recommendations (different scent types)
+- If user mentions gender or occasion, adapt tone and suggestions
+- Always explain WHY each product fits the user
 - If asked about something unrelated to fragrance, gently redirect`;
 
     const groqMessages: ChatCompletionMessageParam[] = [
