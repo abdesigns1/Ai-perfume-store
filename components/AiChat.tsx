@@ -50,13 +50,16 @@ export default function AiChat({ theme: t, onClose, compact = false }: Props) {
 
   const sendMessage = async (text: string) => {
     if (!text.trim() || loading) return;
+
+    const trimmed = text.trim();
     setInput("");
 
     const userMsg: Message = {
       id: Date.now().toString(),
       role: "user",
-      content: text.trim(),
+      content: trimmed,
     };
+
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
     setLoading(true);
@@ -73,32 +76,121 @@ export default function AiChat({ theme: t, onClose, compact = false }: Props) {
         }),
       });
 
-      const data = await res.json();
+      let data: any = null;
+
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+
+      if (!res.ok) {
+        const errorMessage =
+          data?.details?.error ||
+          data?.details?.message ||
+          data?.details ||
+          data?.error ||
+          `Request failed with status ${res.status}`;
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            role: "assistant",
+            content: `I ran into an issue: ${errorMessage}`,
+          },
+        ]);
+        return;
+      }
+
+      if (!data?.text || typeof data.text !== "string") {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            role: "assistant",
+            content: "The AI returned an empty response. Please try again.",
+          },
+        ]);
+        return;
+      }
+
       setMessages((prev) => [
         ...prev,
         {
           id: (Date.now() + 1).toString(),
           role: "assistant",
-          content:
-            data.text ??
-            "I'm sorry, I couldn't process that. Please try again.",
-          products: data.products ?? [],
+          content: data.text,
+          products: Array.isArray(data.products) ? data.products : [],
         },
       ]);
-    } catch {
+    } catch (error: any) {
       setMessages((prev) => [
         ...prev,
         {
           id: (Date.now() + 1).toString(),
           role: "assistant",
-          content:
-            "I'm having trouble connecting right now. Please try again in a moment.",
+          content: error?.message
+            ? `I'm having trouble connecting right now: ${error.message}`
+            : "I'm having trouble connecting right now. Please try again in a moment.",
         },
       ]);
     } finally {
       setLoading(false);
     }
   };
+
+  // const sendMessage = async (text: string) => {
+  //   if (!text.trim() || loading) return;
+  //   setInput("");
+
+  //   const userMsg: Message = {
+  //     id: Date.now().toString(),
+  //     role: "user",
+  //     content: text.trim(),
+  //   };
+  //   const updatedMessages = [...messages, userMsg];
+  //   setMessages(updatedMessages);
+  //   setLoading(true);
+
+  //   try {
+  //     const res = await fetch("/api/ai", {
+  //       method: "POST",
+  //       headers: { "Content-Type": "application/json" },
+  //       body: JSON.stringify({
+  //         messages: updatedMessages.map((m) => ({
+  //           role: m.role,
+  //           content: m.content,
+  //         })),
+  //       }),
+  //     });
+
+  //     const data = await res.json();
+  //     setMessages((prev) => [
+  //       ...prev,
+  //       {
+  //         id: (Date.now() + 1).toString(),
+  //         role: "assistant",
+  //         content:
+  //           data.text ??
+  //           "I'm sorry, I couldn't process that. Please try again.",
+  //         products: data.products ?? [],
+  //       },
+  //     ]);
+  //   } catch {
+  //     setMessages((prev) => [
+  //       ...prev,
+  //       {
+  //         id: (Date.now() + 1).toString(),
+  //         role: "assistant",
+  //         content:
+  //           "I'm having trouble connecting right now. Please try again in a moment.",
+  //       },
+  //     ]);
+  //   } finally {
+  //     setLoading(false);
+  //   }
+  // };
 
   const handleAddToCart = (product: any) => {
     addItem(
