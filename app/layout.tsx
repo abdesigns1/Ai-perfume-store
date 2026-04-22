@@ -1,9 +1,10 @@
 // app/layout.tsx
-// Root layout — wraps the entire app with CartProvider so useCart()
-// works on every page including Navbar and CartDrawer.
+// Root layout — wraps the entire app with CartProvider.
+// AiChatBubble is rendered here so it appears on every page.
 
 import type { Metadata } from "next";
 import { CartProvider } from "../lib/cartContext";
+import AiChatBubble from "../components/AiChatBubble";
 
 export const metadata: Metadata = {
   title: "ScentAI — Find Your Signature Scent",
@@ -27,7 +28,10 @@ export default function RootLayout({
         />
       </head>
       <body style={{ margin: 0, padding: 0 }}>
-        <CartProvider>{children}</CartProvider>
+        <CartProvider>
+          {children}
+          <AiChatBubble />
+        </CartProvider>
       </body>
     </html>
   );

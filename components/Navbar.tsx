@@ -108,7 +108,7 @@ export default function Navbar({ theme: t, onToggleTheme }: Props) {
         <div className="hide-mobile" style={{ display: "flex", gap: 36 }}>
           {[
             { label: "Collection", href: "/products" },
-            { label: "Discover", href: "/#ai-section" },
+            { label: "Scentara AI", href: "/ai" },
             { label: "About", href: "#" },
             { label: "Contact", href: "#" },
           ].map(({ label, href }) => (
