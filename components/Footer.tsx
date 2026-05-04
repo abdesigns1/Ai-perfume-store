@@ -12,7 +12,10 @@ const footerLinks = [
     title: "Shop",
     links: ["All Fragrances", "New Arrivals", "Best Sellers", "Gift Sets"],
   },
-  { title: "Company", links: ["About Us", "Blog", "Press", "Careers"] },
+  {
+    title: "Company",
+    links: ["About Us", "Blog", "Careers", "Privacy Policy"],
+  },
   { title: "Support", links: ["FAQ", "Shipping", "Returns", "Contact"] },
 ];
 

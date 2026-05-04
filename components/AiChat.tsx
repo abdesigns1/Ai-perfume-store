@@ -2,6 +2,7 @@
 
 // components/AiChat.tsx
 // Full AI chat UI — text messages + product cards + add to cart.
+// Chat history is persisted to localStorage so it survives page changes and bubble close/open.
 
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
@@ -15,6 +16,9 @@ type Message = {
   content: string;
   products?: any[];
 };
+
+const STORAGE_KEY = "scentai-chat-history";
+const MAX_STORED_MESSAGES = 50; // keep last 50 messages to avoid bloating localStorage
 
 const SUGGESTIONS = [
   "I need something for a first date 🌹",
@@ -37,17 +41,57 @@ export default function AiChat({ theme: t, onClose, compact = false }: Props) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
+  const [mounted, setMounted] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // ── Load messages from localStorage on mount ────────────────────────────
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed: Message[] = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMessages(parsed);
+        }
+      }
+    } catch {
+      // localStorage unavailable or corrupted — start fresh
+    }
+    setMounted(true);
+  }, []);
+
+  // ── Save messages to localStorage whenever they change ──────────────────
+  useEffect(() => {
+    if (!mounted) return; // don't save before we've loaded
+    try {
+      // Keep only the most recent messages to avoid storage bloat
+      const toStore = messages.slice(-MAX_STORED_MESSAGES);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore));
+    } catch {
+      // Storage full or unavailable — fail silently
+    }
+  }, [messages, mounted]);
+
+  // ── Scroll to bottom on new message ────────────────────────────────────
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
+  // ── Focus input on mount (full page only) ──────────────────────────────
   useEffect(() => {
     if (!compact) setTimeout(() => inputRef.current?.focus(), 100);
   }, [compact]);
 
+  // ── Clear chat history ──────────────────────────────────────────────────
+  const clearHistory = () => {
+    setMessages([]);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {}
+  };
+
+  // ── Send message ────────────────────────────────────────────────────────
   const sendMessage = async (text: string) => {
     if (!text.trim() || loading) return;
 
@@ -140,58 +184,7 @@ export default function AiChat({ theme: t, onClose, compact = false }: Props) {
     }
   };
 
-  // const sendMessage = async (text: string) => {
-  //   if (!text.trim() || loading) return;
-  //   setInput("");
-
-  //   const userMsg: Message = {
-  //     id: Date.now().toString(),
-  //     role: "user",
-  //     content: text.trim(),
-  //   };
-  //   const updatedMessages = [...messages, userMsg];
-  //   setMessages(updatedMessages);
-  //   setLoading(true);
-
-  //   try {
-  //     const res = await fetch("/api/ai", {
-  //       method: "POST",
-  //       headers: { "Content-Type": "application/json" },
-  //       body: JSON.stringify({
-  //         messages: updatedMessages.map((m) => ({
-  //           role: m.role,
-  //           content: m.content,
-  //         })),
-  //       }),
-  //     });
-
-  //     const data = await res.json();
-  //     setMessages((prev) => [
-  //       ...prev,
-  //       {
-  //         id: (Date.now() + 1).toString(),
-  //         role: "assistant",
-  //         content:
-  //           data.text ??
-  //           "I'm sorry, I couldn't process that. Please try again.",
-  //         products: data.products ?? [],
-  //       },
-  //     ]);
-  //   } catch {
-  //     setMessages((prev) => [
-  //       ...prev,
-  //       {
-  //         id: (Date.now() + 1).toString(),
-  //         role: "assistant",
-  //         content:
-  //           "I'm having trouble connecting right now. Please try again in a moment.",
-  //       },
-  //     ]);
-  //   } finally {
-  //     setLoading(false);
-  //   }
-  // };
-
+  // ── Add to cart ──────────────────────────────────────────────────────────
   const handleAddToCart = (product: any) => {
     addItem(
       {
@@ -209,6 +202,8 @@ export default function AiChat({ theme: t, onClose, compact = false }: Props) {
     setAddedIds((prev) => new Set([...prev, product.id]));
     if (!compact) openCart();
   };
+
+  const hasHistory = messages.length > 0;
 
   return (
     <div
@@ -285,7 +280,38 @@ export default function AiChat({ theme: t, onClose, compact = false }: Props) {
             </p>
           </div>
         </div>
+
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {/* Clear history button — only shown when there are messages */}
+          {hasHistory && (
+            <button
+              onClick={clearHistory}
+              title="Clear chat history"
+              style={{
+                background: "none",
+                border: `1px solid ${t.border}`,
+                color: t.muted,
+                cursor: "pointer",
+                fontFamily: fonts.sans,
+                fontSize: 9,
+                letterSpacing: "0.2em",
+                textTransform: "uppercase",
+                padding: "5px 10px",
+                transition: "all 0.2s",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.borderColor = "#e25555";
+                (e.currentTarget as HTMLElement).style.color = "#e25555";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.borderColor = t.border;
+                (e.currentTarget as HTMLElement).style.color = t.muted;
+              }}
+            >
+              Clear
+            </button>
+          )}
+
           {compact && (
             <Link
               href="/ai"
@@ -312,6 +338,7 @@ export default function AiChat({ theme: t, onClose, compact = false }: Props) {
               Full View
             </Link>
           )}
+
           {onClose && (
             <button
               onClick={onClose}
@@ -342,7 +369,7 @@ export default function AiChat({ theme: t, onClose, compact = false }: Props) {
           gap: 20,
         }}
       >
-        {/* Welcome */}
+        {/* Welcome — only shown when no messages */}
         {messages.length === 0 && (
           <div style={{ textAlign: "center", paddingTop: compact ? 8 : 40 }}>
             <div

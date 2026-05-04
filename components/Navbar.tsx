@@ -22,8 +22,8 @@ type Props = {
 const NAV_LINKS = [
   { label: "Collection", href: "/products" },
   { label: "Scentara AI", href: "/ai" },
-  { label: "About", href: "#" },
-  { label: "Contact", href: "#" },
+  { label: "About", href: "/about" },
+  { label: "Contact", href: "/contact" },
 ];
 
 const BOTTOM_TABS = [
